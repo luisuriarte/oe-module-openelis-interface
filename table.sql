@@ -14,3 +14,10 @@ CREATE TABLE IF NOT EXISTS `mod_openelis_code_mapping` (
   UNIQUE KEY `uk_mapping` (`openemr_procedure_code`),
   KEY `idx_loinc` (`loinc_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+#EndIf
+
+#IfMissingColumn procedure_order mod_openelis_sync_status
+ALTER TABLE `procedure_order` ADD COLUMN `mod_openelis_sync_status`
+    ENUM('pending','sent','error') DEFAULT NULL
+    COMMENT 'OpenELIS sync: pending=sent, error=failed, NULL=not yet attempted';
+#EndIf

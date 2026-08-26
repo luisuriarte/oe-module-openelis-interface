@@ -82,7 +82,62 @@ INSERT IGNORE INTO `lang_custom` (`lang_description`, `lang_code`, `constant_nam
 
 -- Pagination
 ('Spanish (Latin American)', 'el', 'Previous',                                                'Anterior'),
-('Spanish (Latin American)', 'el', 'Next',                                                    'Siguiente');
+('Spanish (Latin American)', 'el', 'Next',                                                    'Siguiente'),
+
+-- src/Bootstrap.php (menu labels)
+('Spanish (Latin American)', 'el', 'Pending Orders',                                          'Órdenes Pendientes'),
+
+-- public/pending_orders.php (page)
+('Spanish (Latin American)', 'el', 'OpenELIS Pending Orders',                                 'Órdenes Pendientes OpenELIS'),
+('Spanish (Latin American)', 'el', 'Send lab orders to OpenELIS on demand. Only orders with complete code mappings can be sent.', 'Envíe órdenes de laboratorio a OpenELIS bajo demanda. Solo las órdenes con mapeo completo de códigos pueden enviarse.'),
+('Spanish (Latin American)', 'el', 'Pending',                                                 'Pendientes'),
+('Spanish (Latin American)', 'el', 'All Orders',                                              'Todas las Órdenes'),
+('Spanish (Latin American)', 'el', 'Sent',                                                    'Enviadas'),
+('Spanish (Latin American)', 'el', 'Errors',                                                  'Errores'),
+('Spanish (Latin American)', 'el', 'Search by patient name, ID, or order #...',               'Buscar por nombre de paciente, ID u orden #...'),
+('Spanish (Latin American)', 'el', 'No pending orders to send.',                              'No hay órdenes pendientes para enviar.'),
+('Spanish (Latin American)', 'el', 'No orders found.',                                        'No se encontraron órdenes.'),
+('Spanish (Latin American)', 'el', 'Order #',                                                 'Orden #'),
+('Spanish (Latin American)', 'el', 'Date',                                                    'Fecha'),
+('Spanish (Latin American)', 'el', 'Patient',                                                 'Paciente'),
+('Spanish (Latin American)', 'el', 'Lab',                                                     'Laboratorio'),
+('Spanish (Latin American)', 'el', 'Tests',                                                   'Pruebas'),
+('Spanish (Latin American)', 'el', 'Mapping',                                                 'Mapeo'),
+('Spanish (Latin American)', 'el', 'Complete',                                                'Completo'),
+('Spanish (Latin American)', 'el', 'None',                                                    'Ninguno'),
+('Spanish (Latin American)', 'el', 'Pending',                                                 'Pendiente'),
+('Spanish (Latin American)', 'el', 'Action',                                                  'Acción'),
+('Spanish (Latin American)', 'el', 'Send',                                                    'Enviar'),
+('Spanish (Latin American)', 'el', 'Sent',                                                    'Enviado'),
+('Spanish (Latin American)', 'el', 'Error',                                                   'Error'),
+('Spanish (Latin American)', 'el', 'Transmitted (HL7)',                                       'Transmitido (HL7)'),
+('Spanish (Latin American)', 'el', 'Complete code mapping required',                          'Se requiere mapeo completo de códigos'),
+('Spanish (Latin American)', 'el', 'Send this order to OpenELIS?',                            '¿Enviar esta orden a OpenELIS?'),
+('Spanish (Latin American)', 'el', 'Sending...',                                              'Enviando...'),
+('Spanish (Latin American)', 'el', 'Sent to OpenELIS',                                        'Enviado a OpenELIS'),
+('Spanish (Latin American)', 'el', 'Error:',                                                  'Error:'),
+('Spanish (Latin American)', 'el', 'Connection error',                                        'Error de conexión'),
+('Spanish (Latin American)', 'el', 'Showing',                                                 'Mostrando'),
+('Spanish (Latin American)', 'el', 'orders',                                                  'órdenes'),
+('Spanish (Latin American)', 'el', 'Retry OpenELIS',                                          'Reintentar OpenELIS'),
+('Spanish (Latin American)', 'el', 'Retry sending to OpenELIS',                              'Reintentar envío a OpenELIS'),
+('Spanish (Latin American)', 'el', 'Send this order to OpenELIS via FHIR',                   'Enviar esta orden a OpenELIS vía FHIR'),
+
+-- src/Service/OrderSyncService.php (status messages)
+('Spanish (Latin American)', 'el', 'Order not found',                                         'Orden no encontrada'),
+('Spanish (Latin American)', 'el', 'No tests to send',                                       'No hay pruebas para enviar'),
+('Spanish (Latin American)', 'el', 'No active lab provider configured for this order',        'No hay proveedor de laboratorio activo configurado para esta orden'),
+('Spanish (Latin American)', 'el', 'None of the tests have LOINC codes mapped. Please configure code mappings first.', 'Ninguna de las pruebas tiene códigos LOINC mapeados. Configure el mapeo de códigos primero.'),
+('Spanish (Latin American)', 'el', 'Skipped',                                                 'Omitidas'),
+('Spanish (Latin American)', 'el', 'Order sent to OpenELIS successfully',                     'Orden enviada a OpenELIS correctamente'),
+('Spanish (Latin American)', 'el', 'Error communicating with OpenELIS',                       'Error de comunicación con OpenELIS'),
+('Spanish (Latin American)', 'el', 'Unexpected error',                                        'Error inesperado'),
+('Spanish (Latin American)', 'el', 'Sync error — retry',                                      'Error de sincronización — reintentar'),
+('Spanish (Latin American)', 'el', 'Access denied',                                           'Acceso denegado'),
+('Spanish (Latin American)', 'el', 'Invalid CSRF token',                                      'Token CSRF inválido'),
+('Spanish (Latin American)', 'el', 'Invalid order ID',                                        'ID de orden inválido'),
+('Spanish (Latin American)', 'el', 'Lab provider is inactive',                                'El proveedor de laboratorio está inactivo'),
+('Spanish (Latin American)', 'el', 'Internal error',                                          'Error interno');
 
 -- ============================================================================
 -- SYNC: Populate lang_languages, lang_constants and lang_definitions

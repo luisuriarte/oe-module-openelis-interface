@@ -1,0 +1,88 @@
+# Patch: Add "Send to OpenELIS" button to procedure_order form
+# 
+# File: interface/forms/procedure_order/common.php
+# OpenEMR version: 8.2.0
+#
+# This patch adds a "Send to OpenELIS" button in the order view page,
+# alongside the existing Save/Transmit/Cancel buttons.
+#
+# INSTRUCTIONS:
+# 1. Backup your common.php file
+# 2. Open interface/forms/procedure_order/common.php
+# 3. Search for the marker line (see below)
+# 4. Insert the code block after it
+# 5. Test by opening an existing order in view mode
+
+## ============================================================
+## STEP 1: Find this block (around line 1900-1904):
+## ============================================================
+#
+#                                     <button type="submit" class="btn btn-primary btn-transmit"
+#                                         name='bn_xmit' value="transmit"
+#                                         title='<?php echo xla('Click to transmit the order. Order will be saved prior to sending.'); ?>'
+#                                         onclick='top.restoreSession();transmitting = true;'><?php echo xlt('Transmit Order'); ?>
+#                                     </button>
+#
+## ============================================================
+## STEP 2: INSERT the following block AFTER the Transmit button:
+## ============================================================
+#
+#                                     <?php if ($viewmode && empty($row['date_transmitted'])) { ?>
+#                                     <a href="<?php echo $GLOBALS['webroot']; ?>/interface/modules/custom_modules/openelis/public/send_order_action.php?order_id=<?php echo attr($formid); ?>"
+#                                        class="btn btn-info btn-openelis-send"
+#                                        onclick="event.preventDefault(); sendOrderToOpenELIS(this, <?php echo attr($formid); ?>);"
+#                                        title="<?php echo xla('Send this order to OpenELIS via FHIR'); ?>">
+#                                         <?php echo xlt('Send to OpenELIS'); ?>
+#                                     </a>
+#                                     <?php } elseif ($viewmode && ($row['mod_openelis_sync_status'] ?? '') === 'sent') { ?>
+#                                     <button type="button" class="btn btn-outline-info" disabled>
+#                                         ✓ <?php echo xlt('Sent to OpenELIS'); ?>
+#                                     </button>
+#                                     <?php } elseif ($viewmode && ($row['mod_openelis_sync_status'] ?? '') === 'error') { ?>
+#                                     <a href="<?php echo $GLOBALS['webroot']; ?>/interface/modules/custom_modules/openelis/public/send_order_action.php?order_id=<?php echo attr($formid); ?>"
+#                                        class="btn btn-warning btn-openelis-send"
+#                                        onclick="event.preventDefault(); sendOrderToOpenELIS(this, <?php echo attr($formid); ?>);"
+#                                        title="<?php echo xla('Retry sending to OpenELIS'); ?>">
+#                                         <?php echo xlt('Retry OpenELIS'); ?>
+#                                     </a>
+#                                     <?php } ?>
+#
+## ============================================================
+## STEP 3: Add this JavaScript function before the </script> tag
+## (around line 1080-1090, after the validate() function):
+## ============================================================
+#
+#         function sendOrderToOpenELIS(btn, orderId) {
+#             if (!confirm(<?php echo xlj("Send this order to OpenELIS?"); ?>)) return;
+#
+#             var origText = btn.innerHTML;
+#             btn.disabled = true;
+#             btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> ' + <?php echo xlj("Sending..."); ?>;
+#
+#             var formData = new FormData();
+#             formData.append('order_id', orderId);
+#             formData.append('csrf_token_form', <?php echo js_escape(oe_module_csrf_collect('OpenElisModule')); ?>);
+#             formData.append('action', 'send');
+#
+#             fetch(<?php echo js_escape($GLOBALS['webroot'] . '/interface/modules/custom_modules/openelis/public/send_order_action.php'); ?>, {
+#                 method: 'POST',
+#                 body: formData,
+#                 credentials: 'same-origin'
+#             })
+#             .then(function(r) { return r.json(); })
+#             .then(function(data) {
+#                 if (data.success) {
+#                     btn.outerHTML = '<button type="button" class="btn btn-outline-info" disabled>✓ ' + <?php echo xlj("Sent to OpenELIS"); ?> + '</button>';
+#                     alert(data.message);
+#                 } else {
+#                     alert(<?php echo xlj("Error:"); ?> + ' ' + data.message);
+#                     btn.disabled = false;
+#                     btn.innerHTML = origText;
+#                 }
+#             })
+#             .catch(function(err) {
+#                 alert(<?php echo xlj("Connection error"); ?>);
+#                 btn.disabled = false;
+#                 btn.innerHTML = origText;
+#             });
+#         }

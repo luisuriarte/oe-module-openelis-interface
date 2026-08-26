@@ -30,21 +30,35 @@ class Bootstrap
 
         // Compute module URL relative to __DIR__ (src/) so it works regardless of directory name.
         // __DIR__ = .../openelis/src → two levels up = module root
-        $moduleRelativePath = '/interface/modules/custom_modules/' . basename(dirname(__DIR__)) . '/public/admin_mapping.php';
+        $modulePath = '/interface/modules/custom_modules/' . basename(dirname(__DIR__)) . '/public/';
 
-        $menuItem = new \stdClass();
-        $menuItem->requirement = 0;
-        $menuItem->target = 'mod';
-        $menuItem->menu_id = 'mod0';
-        $menuItem->acl_req = ["admin", "super"];
-        $menuItem->label = xlt("OpenELIS Code Mapping");
-        $menuItem->global_req = [];
-        $menuItem->url = $moduleRelativePath;
-        $menuItem->children = [];
+        $menuItems = [
+            [
+                'menu_id' => 'mod1',
+                'label' => xlt("Pending Orders"),
+                'url' => $modulePath . 'pending_orders.php',
+            ],
+            [
+                'menu_id' => 'mod0',
+                'label' => xlt("OpenELIS Code Mapping"),
+                'url' => $modulePath . 'admin_mapping.php',
+            ],
+        ];
 
         foreach ($menu as $item) {
             if ($item->menu_id == 'proimg') {
-                $item->children[] = $menuItem;
+                foreach ($menuItems as $mi) {
+                    $menuItem = new \stdClass();
+                    $menuItem->requirement = 0;
+                    $menuItem->target = 'mod';
+                    $menuItem->menu_id = $mi['menu_id'];
+                    $menuItem->acl_req = ["admin", "super"];
+                    $menuItem->label = $mi['label'];
+                    $menuItem->global_req = [];
+                    $menuItem->url = $mi['url'];
+                    $menuItem->children = [];
+                    $item->children[] = $menuItem;
+                }
                 break;
             }
         }
