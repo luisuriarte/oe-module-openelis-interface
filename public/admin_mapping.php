@@ -8,7 +8,7 @@
  * @license https://github.com/openemr/openemr/blob/master/LICENSE GNU General Public License 3
  */
 
-require_once dirname(__FILE__, 6) . '/globals.php';
+require_once dirname(__FILE__, 5) . '/globals.php';
 
 use OpenEMR\Common\Acl\AclMain;
 use OpenEMR\Common\Csrf\CsrfUtils;

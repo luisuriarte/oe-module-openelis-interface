@@ -7,5 +7,5 @@ CREATE TABLE IF NOT EXISTS `mod_openelis_code_mapping` (
   `openelis_test_name` VARCHAR(255) NULL,
   `is_active` TINYINT(1) DEFAULT 1,
   UNIQUE KEY `uk_mapping` (`openemr_procedure_code`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 #EndIf
