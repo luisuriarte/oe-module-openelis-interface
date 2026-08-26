@@ -14,6 +14,35 @@ use OpenEMR\Common\Acl\AclMain;
 use OpenEMR\Common\Csrf\CsrfUtils;
 use OpenEMR\Core\Header;
 
+// ── CSRF compatibility wrapper (OpenEMR 8.0 vs 8.2+) ───────────────────
+// 8.0: collectCsrfToken($subject, $session)  — subject first, session optional
+// 8.2: collectCsrfToken($session, $subject)  — session first, subject optional
+function oe_module_csrf_collect(string $subject = 'default'): string
+{
+    $r = new ReflectionMethod(CsrfUtils::class, 'collectCsrfToken');
+    $p = $r->getParameters()[0];
+    if ($p->hasType() && $p->getType()->getName() === 'Symfony\Component\HttpFoundation\Session\SessionInterface') {
+        // 8.2+ signature: session first
+        $session = \OpenEMR\Common\Session\SessionWrapperFactory::getInstance()->getActiveSession();
+        return CsrfUtils::collectCsrfToken($session, $subject);
+    }
+    // 8.0 signature: subject first, session optional
+    return CsrfUtils::collectCsrfToken($subject);
+}
+
+function oe_module_csrf_verify(?string $token, string $subject = 'default'): bool
+{
+    $r = new ReflectionMethod(CsrfUtils::class, 'verifyCsrfToken');
+    $p = $r->getParameters();
+    // 8.2: verifyCsrfToken($token, $session, $subject) — 2nd param is SessionInterface
+    if (count($p) >= 2 && $p[1]->hasType() && $p[1]->getType()->getName() === 'Symfony\Component\HttpFoundation\Session\SessionInterface') {
+        $session = \OpenEMR\Common\Session\SessionWrapperFactory::getInstance()->getActiveSession();
+        return CsrfUtils::verifyCsrfToken($token, $session, $subject);
+    }
+    // 8.0: verifyCsrfToken($token, $subject, $session)
+    return CsrfUtils::verifyCsrfToken($token, $subject);
+}
+
 if (!AclMain::aclCheckCore('admin', 'super')) {
     echo xlt('Access denied');
     exit;
@@ -27,7 +56,7 @@ $page_mapped = max(1, (int)($_GET['page_mapped'] ?? 1));
 // ── Process POST actions ────────────────────────────────────────────────
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (!CsrfUtils::verifyCsrfToken($_POST['csrf_token_form'] ?? '')) {
+    if (!oe_module_csrf_verify($_POST['csrf_token_form'] ?? '', 'OpenElisModule')) {
         CsrfUtils::csrfNotVerified();
     }
 
@@ -136,7 +165,7 @@ while ($row = sqlFetchArray($rsMapped)) {
     $mapped[] = $row;
 }
 
-$csrfToken = CsrfUtils::collectCsrfToken();
+$csrfToken = oe_module_csrf_collect('OpenElisModule');
 ?>
 <!DOCTYPE html>
 <html lang="en">
