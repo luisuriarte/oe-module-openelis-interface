@@ -7,9 +7,6 @@ use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 
 class Bootstrap
 {
-    const MODULE_INSTALLATION_PATH = "/interface/modules/custom_modules/";
-    const MODULE_DIRECTORY_NAME = "openelis";
-
     private EventDispatcherInterface $eventDispatcher;
 
     public function __construct(EventDispatcherInterface $eventDispatcher)
@@ -31,14 +28,18 @@ class Bootstrap
     {
         $menu = $event->getMenu();
 
+        // Compute module URL relative to __DIR__ (src/) so it works regardless of directory name.
+        // __DIR__ = .../openelis/src → two levels up = module root
+        $moduleRelativePath = '/interface/modules/custom_modules/' . basename(dirname(__DIR__)) . '/public/admin_mapping.php';
+
         $menuItem = new \stdClass();
         $menuItem->requirement = 0;
         $menuItem->target = 'mod';
         $menuItem->menu_id = 'mod0';
         $menuItem->acl_req = ["admin", "super"];
-        $menuItem->label = xlt("Mapeo códigos OpenELIS");
+        $menuItem->label = xlt("OpenELIS Code Mapping");
         $menuItem->global_req = [];
-        $menuItem->url = self::MODULE_INSTALLATION_PATH . self::MODULE_DIRECTORY_NAME . "/public/admin_mapping.php";
+        $menuItem->url = $moduleRelativePath;
         $menuItem->children = [];
 
         foreach ($menu as $item) {
