@@ -347,6 +347,7 @@ $webRoot = $GLOBALS['webroot'] ?? '';
                     <thead class="table-light">
                         <tr>
                             <th><?php echo xlt("EMR Code"); ?></th>
+                            <th><?php echo xlt("Standard"); ?></th>
                             <th><?php echo xlt("EMR Name"); ?></th>
                             <th><?php echo xlt("ELIS ID"); ?></th>
                             <th><?php echo xlt("ELIS Name"); ?></th>
