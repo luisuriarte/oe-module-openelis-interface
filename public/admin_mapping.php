@@ -362,6 +362,9 @@ $webRoot = $GLOBALS['webroot'] ?? '';
                     <?php foreach ($mapped as $row): ?>
                         <tr id="mapped-<?php echo attr($row['mapping_id']); ?>">
                             <td><code><?php echo text($row['procedure_code']); ?></code></td>
+                            <td class="standard-code">
+                                <?php echo ($row['standard_code'] ?? '') !== '' ? text($row['standard_code']) : '—'; ?>
+                            </td>
                             <td><?php echo text($row['name']); ?></td>
                             <td><code><?php echo text($row['openelis_test_id']); ?></code></td>
                             <td><?php echo text($row['openelis_test_name'] ?? ''); ?></td>
@@ -406,7 +409,7 @@ $webRoot = $GLOBALS['webroot'] ?? '';
                             </td>
                         </tr>
                         <tr class="form-inline-row" id="mapped-<?php echo attr($row['mapping_id']); ?>-form">
-                            <td colspan="9">
+                            <td colspan="10">
                                 <form method="post" class="p-2 border rounded bg-light">
                                     <input type="hidden" name="csrf_token_form" value="<?php echo attr($csrfToken); ?>">
                                     <input type="hidden" name="action" value="save_mapping">
