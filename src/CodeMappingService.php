@@ -5,10 +5,7 @@ namespace OpenEMR\Modules\OpenElis;
 class CodeMappingService
 {
     /**
-     * Dado un openemr_procedure_code, devuelve el openelis_test_id activo
-     * correspondiente, o null si no existe mapeo activo.
-     *
-     * La UNIQUE KEY en openemr_procedure_code garantiza a lo sumo una fila.
+     * Returns the active openelis_test_id for a given procedure code, or null.
      */
     public static function resolveOpenElisTestId(string $procedureCode): ?string
     {
@@ -29,8 +26,62 @@ class CodeMappingService
     }
 
     /**
-     * Dado un openemr_procedure_code, devuelve el openelis_test_id activo.
-     * Si no existe mapeo, devuelve el mismo procedure_code como fallback.
+     * Returns the full mapping row for a given procedure code, or null.
+     * Fields: openelis_test_id, openelis_test_name, loinc_code,
+     *         snomed_specimen, snomed_finding, units.
+     */
+    public static function resolveMapping(string $procedureCode): ?array
+    {
+        if (empty($procedureCode)) {
+            return null;
+        }
+
+        $sql = "SELECT openelis_test_id, openelis_test_name,
+                       loinc_code, snomed_specimen, snomed_finding, units
+                FROM mod_openelis_code_mapping
+                WHERE openemr_procedure_code = ? AND is_active = 1";
+        $row = sqlQuery($sql, [$procedureCode]);
+
+        if (!$row || empty($row['openelis_test_id'])) {
+            return null;
+        }
+
+        return $row;
+    }
+
+    /**
+     * Returns the LOINC code for a given procedure code, or null.
+     */
+    public static function resolveLoincCode(string $procedureCode): ?string
+    {
+        $row = self::resolveMapping($procedureCode);
+        return !empty($row['loinc_code']) ? $row['loinc_code'] : null;
+    }
+
+    /**
+     * Returns SNOMED specimen and finding codes for a given procedure code.
+     * ['specimen' => '...'|null, 'finding' => '...'|null]
+     */
+    public static function resolveSnomedCodes(string $procedureCode): array
+    {
+        $row = self::resolveMapping($procedureCode);
+        return [
+            'specimen' => $row['snomed_specimen'] ?? null,
+            'finding'  => $row['snomed_finding'] ?? null,
+        ];
+    }
+
+    /**
+     * Returns the units for a given procedure code, or null.
+     */
+    public static function resolveUnits(string $procedureCode): ?string
+    {
+        $row = self::resolveMapping($procedureCode);
+        return !empty($row['units']) ? $row['units'] : null;
+    }
+
+    /**
+     * Returns the openelis_test_id, or falls back to the procedure code itself.
      */
     public static function resolveWithFallback(string $procedureCode): string
     {

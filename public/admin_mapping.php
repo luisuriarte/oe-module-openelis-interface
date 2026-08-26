@@ -15,18 +15,14 @@ use OpenEMR\Common\Csrf\CsrfUtils;
 use OpenEMR\Core\Header;
 
 // ── CSRF compatibility wrapper (OpenEMR 8.0 vs 8.2+) ───────────────────
-// 8.0: collectCsrfToken($subject, $session)  — subject first, session optional
-// 8.2: collectCsrfToken($session, $subject)  — session first, subject optional
 function oe_module_csrf_collect(string $subject = 'default'): string
 {
     $r = new ReflectionMethod(CsrfUtils::class, 'collectCsrfToken');
     $p = $r->getParameters()[0];
     if ($p->hasType() && $p->getType()->getName() === 'Symfony\Component\HttpFoundation\Session\SessionInterface') {
-        // 8.2+ signature: session first
         $session = \OpenEMR\Common\Session\SessionWrapperFactory::getInstance()->getActiveSession();
         return CsrfUtils::collectCsrfToken($session, $subject);
     }
-    // 8.0 signature: subject first, session optional
     return CsrfUtils::collectCsrfToken($subject);
 }
 
@@ -34,12 +30,10 @@ function oe_module_csrf_verify(?string $token, string $subject = 'default'): boo
 {
     $r = new ReflectionMethod(CsrfUtils::class, 'verifyCsrfToken');
     $p = $r->getParameters();
-    // 8.2: verifyCsrfToken($token, $session, $subject) — 2nd param is SessionInterface
     if (count($p) >= 2 && $p[1]->hasType() && $p[1]->getType()->getName() === 'Symfony\Component\HttpFoundation\Session\SessionInterface') {
         $session = \OpenEMR\Common\Session\SessionWrapperFactory::getInstance()->getActiveSession();
         return CsrfUtils::verifyCsrfToken($token, $session, $subject);
     }
-    // 8.0: verifyCsrfToken($token, $subject, $session)
     return CsrfUtils::verifyCsrfToken($token, $subject);
 }
 
@@ -67,17 +61,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $procedureName = trim($_POST['procedure_name'] ?? '');
         $elisTestId = trim($_POST['openelis_test_id'] ?? '');
         $elisTestName = trim($_POST['openelis_test_name'] ?? '');
+        $loincCode = trim($_POST['loinc_code'] ?? '');
+        $snomedSpecimen = trim($_POST['snomed_specimen'] ?? '');
+        $snomedFinding = trim($_POST['snomed_finding'] ?? '');
+        $units = trim($_POST['units'] ?? '');
 
         if ($procedureCode !== '' && $elisTestId !== '') {
             $sql = "INSERT INTO mod_openelis_code_mapping
-                        (openemr_procedure_code, openemr_procedure_name, openelis_test_id, openelis_test_name, is_active)
-                    VALUES (?, ?, ?, ?, 1)
+                        (openemr_procedure_code, openemr_procedure_name, openelis_test_id, openelis_test_name,
+                         loinc_code, snomed_specimen, snomed_finding, units, is_active)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
                     ON DUPLICATE KEY UPDATE
                         openemr_procedure_name = VALUES(openemr_procedure_name),
                         openelis_test_id = VALUES(openelis_test_id),
                         openelis_test_name = VALUES(openelis_test_name),
+                        loinc_code = VALUES(loinc_code),
+                        snomed_specimen = VALUES(snomed_specimen),
+                        snomed_finding = VALUES(snomed_finding),
+                        units = VALUES(units),
                         is_active = 1";
-            sqlStatement($sql, [$procedureCode, $procedureName, $elisTestId, $elisTestName]);
+            sqlStatement($sql, [
+                $procedureCode, $procedureName, $elisTestId, $elisTestName,
+                $loincCode ?: null, $snomedSpecimen ?: null, $snomedFinding ?: null, $units ?: null
+            ]);
         }
 
         $searchParam = $search !== '' ? '&search=' . attr_url($search) : '';
@@ -151,7 +157,8 @@ while ($row = sqlFetchArray($rsUnmapped)) {
 $offsetMapped = ($page_mapped - 1) * $perPage;
 $rsMapped = sqlStatement(
     "SELECT pt.procedure_code, pt.name, pt.standard_code,
-            m.id AS mapping_id, m.openelis_test_id, m.openelis_test_name, m.is_active
+            m.id AS mapping_id, m.openelis_test_id, m.openelis_test_name,
+            m.loinc_code, m.snomed_specimen, m.snomed_finding, m.units, m.is_active
     FROM procedure_type pt
     INNER JOIN mod_openelis_code_mapping m ON pt.procedure_code = m.openemr_procedure_code
     WHERE pt.activity = 1 AND pt.procedure_type = 'ord'" . $whereExtra . "
@@ -166,6 +173,7 @@ while ($row = sqlFetchArray($rsMapped)) {
 }
 
 $csrfToken = oe_module_csrf_collect('OpenElisModule');
+$webRoot = $GLOBALS['webroot'] ?? '';
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -181,6 +189,8 @@ $csrfToken = oe_module_csrf_collect('OpenElisModule');
         .form-inline-row { display: none; }
         .form-inline-row.open { display: table-row; }
         .standard-code { font-size: 0.85em; color: #6c757d; }
+        .code-badge { font-size: 0.78em; padding: 2px 6px; }
+        .btn-code-finder { border-start-width: 0; }
     </style>
 </head>
 <body class="container-fluid">
@@ -260,27 +270,54 @@ $csrfToken = oe_module_csrf_collect('OpenElisModule');
                         </tr>
                         <tr class="form-inline-row" id="unmapped-<?php echo attr($row['procedure_code']); ?>-form">
                             <td colspan="4">
-                                <form method="post" class="row g-2 align-items-end">
+                                <form method="post" class="p-2 border rounded bg-light">
                                     <input type="hidden" name="csrf_token_form" value="<?php echo attr($csrfToken); ?>">
                                     <input type="hidden" name="action" value="save_mapping">
                                     <input type="hidden" name="procedure_code" value="<?php echo attr($row['procedure_code']); ?>">
                                     <input type="hidden" name="procedure_name" value="<?php echo attr($row['name']); ?>">
-                                    <div class="col-auto">
-                                        <label class="form-label small"><?php echo xlt("OpenELIS Test ID"); ?></label>
-                                        <input type="text" class="form-control form-control-sm" name="openelis_test_id" required
-                                               placeholder="<?php echo attr("e.g., 42"); ?>">
-                                    </div>
-                                    <div class="col-auto">
-                                        <label class="form-label small"><?php echo xlt("OpenELIS Test Name"); ?></label>
-                                        <input type="text" class="form-control form-control-sm" name="openelis_test_name"
-                                               placeholder="<?php echo attr("e.g., Glucose"); ?>">
-                                    </div>
-                                    <div class="col-auto">
-                                        <button type="submit" class="btn btn-sm btn-success"><?php echo xlt("Save"); ?></button>
-                                        <button type="button" class="btn btn-sm btn-outline-secondary"
-                                                onclick="toggleRow('unmapped-<?php echo attr($row['procedure_code']); ?>-form')">
-                                            <?php echo xlt("Cancel"); ?>
-                                        </button>
+                                    <div class="row g-2 align-items-end">
+                                        <div class="col-auto">
+                                            <label class="form-label small"><?php echo xlt("OpenELIS Test ID"); ?></label>
+                                            <input type="text" class="form-control form-control-sm" name="openelis_test_id" required
+                                                   placeholder="<?php echo attr("e.g., 42"); ?>">
+                                        </div>
+                                        <div class="col-auto">
+                                            <label class="form-label small"><?php echo xlt("OpenELIS Test Name"); ?></label>
+                                            <input type="text" class="form-control form-control-sm" name="openelis_test_name"
+                                                   placeholder="<?php echo attr("e.g., Glucose"); ?>">
+                                        </div>
+                                        <div class="col-auto">
+                                            <label class="form-label small"><?php echo xlt("LOINC Code"); ?></label>
+                                            <div class="input-group input-group-sm">
+                                                <input type="text" class="form-control" name="loinc_code" id="loinc-<?php echo attr($row['procedure_code']); ?>"
+                                                       placeholder="<?php echo attr("e.g., 2345-7"); ?>">
+                                                <button type="button" class="btn btn-outline-secondary btn-code-finder"
+                                                        onclick="openCodeFinder('LOINC', 'loinc-<?php echo attr($row['procedure_code']); ?>')"
+                                                        title="<?php echo attr("Search LOINC codes"); ?>">🔍</button>
+                                            </div>
+                                        </div>
+                                        <div class="col-auto">
+                                            <label class="form-label small"><?php echo xlt("SNOMED Specimen"); ?></label>
+                                            <div class="input-group input-group-sm">
+                                                <input type="text" class="form-control" name="snomed_specimen" id="snomed-sp-<?php echo attr($row['procedure_code']); ?>"
+                                                       placeholder="<?php echo attr("e.g., 119297000"); ?>">
+                                                <button type="button" class="btn btn-outline-secondary btn-code-finder"
+                                                        onclick="openCodeFinder('SNOMED-CT', 'snomed-sp-<?php echo attr($row['procedure_code']); ?>')"
+                                                        title="<?php echo attr("Search SNOMED codes"); ?>">🔍</button>
+                                            </div>
+                                        </div>
+                                        <div class="col-auto">
+                                            <label class="form-label small"><?php echo xlt("Units"); ?></label>
+                                            <input type="text" class="form-control form-control-sm" name="units"
+                                                   placeholder="<?php echo attr("e.g., mg/dL"); ?>" style="width:80px;">
+                                        </div>
+                                        <div class="col-auto">
+                                            <button type="submit" class="btn btn-sm btn-success"><?php echo xlt("Save"); ?></button>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary"
+                                                    onclick="toggleRow('unmapped-<?php echo attr($row['procedure_code']); ?>-form')">
+                                                <?php echo xlt("Cancel"); ?>
+                                            </button>
+                                        </div>
                                     </div>
                                 </form>
                             </td>
@@ -311,9 +348,11 @@ $csrfToken = oe_module_csrf_collect('OpenElisModule');
                         <tr>
                             <th><?php echo xlt("EMR Code"); ?></th>
                             <th><?php echo xlt("EMR Name"); ?></th>
-                            <th><?php echo xlt("Standard"); ?></th>
                             <th><?php echo xlt("ELIS ID"); ?></th>
                             <th><?php echo xlt("ELIS Name"); ?></th>
+                            <th><?php echo xlt("LOINC"); ?></th>
+                            <th><?php echo xlt("SNOMED"); ?></th>
+                            <th><?php echo xlt("Units"); ?></th>
                             <th><?php echo xlt("Status"); ?></th>
                             <th class="text-end"><?php echo xlt("Actions"); ?></th>
                         </tr>
@@ -323,11 +362,23 @@ $csrfToken = oe_module_csrf_collect('OpenElisModule');
                         <tr id="mapped-<?php echo attr($row['mapping_id']); ?>">
                             <td><code><?php echo text($row['procedure_code']); ?></code></td>
                             <td><?php echo text($row['name']); ?></td>
-                            <td class="standard-code">
-                                <?php echo $row['standard_code'] !== '' ? text($row['standard_code']) : '—'; ?>
-                            </td>
                             <td><code><?php echo text($row['openelis_test_id']); ?></code></td>
                             <td><?php echo text($row['openelis_test_name'] ?? ''); ?></td>
+                            <td>
+                                <?php if (!empty($row['loinc_code'])): ?>
+                                    <span class="badge bg-info text-dark code-badge"><?php echo text($row['loinc_code']); ?></span>
+                                <?php else: ?>
+                                    <span class="text-muted">—</span>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <?php if (!empty($row['snomed_specimen'])): ?>
+                                    <span class="badge bg-warning text-dark code-badge"><?php echo text($row['snomed_specimen']); ?></span>
+                                <?php else: ?>
+                                    <span class="text-muted">—</span>
+                                <?php endif; ?>
+                            </td>
+                            <td><?php echo text($row['units'] ?? '') ?: '—'; ?></td>
                             <td>
                                 <?php if ($row['is_active']): ?>
                                     <span class="badge badge-active"><?php echo xlt("Active"); ?></span>
@@ -354,28 +405,69 @@ $csrfToken = oe_module_csrf_collect('OpenElisModule');
                             </td>
                         </tr>
                         <tr class="form-inline-row" id="mapped-<?php echo attr($row['mapping_id']); ?>-form">
-                            <td colspan="7">
-                                <form method="post" class="row g-2 align-items-end">
+                            <td colspan="9">
+                                <form method="post" class="p-2 border rounded bg-light">
                                     <input type="hidden" name="csrf_token_form" value="<?php echo attr($csrfToken); ?>">
                                     <input type="hidden" name="action" value="save_mapping">
                                     <input type="hidden" name="procedure_code" value="<?php echo attr($row['procedure_code']); ?>">
                                     <input type="hidden" name="procedure_name" value="<?php echo attr($row['name']); ?>">
-                                    <div class="col-auto">
-                                        <label class="form-label small"><?php echo xlt("OpenELIS Test ID"); ?></label>
-                                        <input type="text" class="form-control form-control-sm" name="openelis_test_id" required
-                                               value="<?php echo attr($row['openelis_test_id']); ?>">
-                                    </div>
-                                    <div class="col-auto">
-                                        <label class="form-label small"><?php echo xlt("OpenELIS Test Name"); ?></label>
-                                        <input type="text" class="form-control form-control-sm" name="openelis_test_name"
-                                               value="<?php echo attr($row['openelis_test_name'] ?? ''); ?>">
-                                    </div>
-                                    <div class="col-auto">
-                                        <button type="submit" class="btn btn-sm btn-success"><?php echo xlt("Save"); ?></button>
-                                        <button type="button" class="btn btn-sm btn-outline-secondary"
-                                                onclick="toggleRow('mapped-<?php echo attr($row['mapping_id']); ?>-form')">
-                                            <?php echo xlt("Cancel"); ?>
-                                        </button>
+                                    <div class="row g-2 align-items-end">
+                                        <div class="col-auto">
+                                            <label class="form-label small"><?php echo xlt("OpenELIS Test ID"); ?></label>
+                                            <input type="text" class="form-control form-control-sm" name="openelis_test_id" required
+                                                   value="<?php echo attr($row['openelis_test_id']); ?>">
+                                        </div>
+                                        <div class="col-auto">
+                                            <label class="form-label small"><?php echo xlt("OpenELIS Test Name"); ?></label>
+                                            <input type="text" class="form-control form-control-sm" name="openelis_test_name"
+                                                   value="<?php echo attr($row['openelis_test_name'] ?? ''); ?>">
+                                        </div>
+                                        <div class="col-auto">
+                                            <label class="form-label small"><?php echo xlt("LOINC Code"); ?></label>
+                                            <div class="input-group input-group-sm">
+                                                <input type="text" class="form-control" name="loinc_code" id="loinc-m-<?php echo attr($row['mapping_id']); ?>"
+                                                       value="<?php echo attr($row['loinc_code'] ?? ''); ?>"
+                                                       placeholder="<?php echo attr("e.g., 2345-7"); ?>">
+                                                <button type="button" class="btn btn-outline-secondary btn-code-finder"
+                                                        onclick="openCodeFinder('LOINC', 'loinc-m-<?php echo attr($row['mapping_id']); ?>')"
+                                                        title="<?php echo attr("Search LOINC codes"); ?>">🔍</button>
+                                            </div>
+                                        </div>
+                                        <div class="col-auto">
+                                            <label class="form-label small"><?php echo xlt("SNOMED Specimen"); ?></label>
+                                            <div class="input-group input-group-sm">
+                                                <input type="text" class="form-control" name="snomed_specimen" id="snomed-sp-m-<?php echo attr($row['mapping_id']); ?>"
+                                                       value="<?php echo attr($row['snomed_specimen'] ?? ''); ?>"
+                                                       placeholder="<?php echo attr("e.g., 119297000"); ?>">
+                                                <button type="button" class="btn btn-outline-secondary btn-code-finder"
+                                                        onclick="openCodeFinder('SNOMED-CT', 'snomed-sp-m-<?php echo attr($row['mapping_id']); ?>')"
+                                                        title="<?php echo attr("Search SNOMED codes"); ?>">🔍</button>
+                                            </div>
+                                        </div>
+                                        <div class="col-auto">
+                                            <label class="form-label small"><?php echo xlt("SNOMED Finding"); ?></label>
+                                            <div class="input-group input-group-sm">
+                                                <input type="text" class="form-control" name="snomed_finding" id="snomed-fn-m-<?php echo attr($row['mapping_id']); ?>"
+                                                       value="<?php echo attr($row['snomed_finding'] ?? ''); ?>"
+                                                       placeholder="<?php echo attr("e.g., 33747003"); ?>">
+                                                <button type="button" class="btn btn-outline-secondary btn-code-finder"
+                                                        onclick="openCodeFinder('SNOMED-CT', 'snomed-fn-m-<?php echo attr($row['mapping_id']); ?>')"
+                                                        title="<?php echo attr("Search SNOMED codes"); ?>">🔍</button>
+                                            </div>
+                                        </div>
+                                        <div class="col-auto">
+                                            <label class="form-label small"><?php echo xlt("Units"); ?></label>
+                                            <input type="text" class="form-control form-control-sm" name="units"
+                                                   value="<?php echo attr($row['units'] ?? ''); ?>"
+                                                   placeholder="<?php echo attr("e.g., mg/dL"); ?>" style="width:80px;">
+                                        </div>
+                                        <div class="col-auto">
+                                            <button type="submit" class="btn btn-sm btn-success"><?php echo xlt("Save"); ?></button>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary"
+                                                    onclick="toggleRow('mapped-<?php echo attr($row['mapping_id']); ?>-form')">
+                                                <?php echo xlt("Cancel"); ?>
+                                            </button>
+                                        </div>
                                     </div>
                                 </form>
                             </td>
@@ -395,6 +487,31 @@ function toggleRow(id) {
         el.classList.toggle('open');
     }
 }
+
+// ── Native OpenEMR Code Finder integration ──────────────────────────────
+var _oeCodeTarget = null;
+
+function openCodeFinder(codeType, targetInputId) {
+    _oeCodeTarget = targetInputId;
+    var url = '<?php echo $webRoot; ?>/interface/patient_file/encounter/find_code_popup.php'
+            + '?codetype=' + encodeURIComponent(codeType);
+    if (typeof dlgopen === 'function') {
+        dlgopen(url, '_blank', 800, 600);
+    } else {
+        window.top.restoreSession();
+        window.open(url, '_blank', 'width=800,height=600,resizable=yes,scrollbars=yes');
+    }
+}
+
+window.set_related = function(codetype, code, form_name, codedesc) {
+    if (_oeCodeTarget && code) {
+        var el = document.getElementById(_oeCodeTarget);
+        if (el) {
+            el.value = code;
+        }
+        _oeCodeTarget = null;
+    }
+};
 </script>
 </body>
 </html>

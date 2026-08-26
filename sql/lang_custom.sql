@@ -43,6 +43,18 @@ INSERT IGNORE INTO `lang_custom` (`lang_description`, `lang_code`, `constant_nam
 ('Spanish (Latin American)', 'el', 'Save',                                                    'Guardar'),
 ('Spanish (Latin American)', 'el', 'Cancel',                                                  'Cancelar'),
 
+-- Code finder fields (assign form)
+('Spanish (Latin American)', 'el', 'LOINC Code',                                              'Código LOINC'),
+('Spanish (Latin American)', 'el', 'SNOMED Specimen',                                         'Espécimen SNOMED'),
+('Spanish (Latin American)', 'el', 'SNOMED Finding',                                          'Hallazgo SNOMED'),
+('Spanish (Latin American)', 'el', 'Units',                                                   'Unidades'),
+('Spanish (Latin American)', 'el', 'e.g., 2345-7',                                            'ej.: 2345-7'),
+('Spanish (Latin American)', 'el', 'e.g., 119297000',                                         'ej.: 119297000'),
+('Spanish (Latin American)', 'el', 'e.g., 33747003',                                          'ej.: 33747003'),
+('Spanish (Latin American)', 'el', 'e.g., mg/dL',                                             'ej.: mg/dL'),
+('Spanish (Latin American)', 'el', 'Search LOINC codes',                                      'Buscar códigos LOINC'),
+('Spanish (Latin American)', 'el', 'Search SNOMED codes',                                     'Buscar códigos SNOMED'),
+
 -- Configured mappings section
 ('Spanish (Latin American)', 'el', 'Configured Mappings',                                     'Mapeos Configurados'),
 ('Spanish (Latin American)', 'el', 'No configured mappings found.',                           'No hay mapeos configurados.'),
@@ -52,6 +64,9 @@ INSERT IGNORE INTO `lang_custom` (`lang_description`, `lang_code`, `constant_nam
 ('Spanish (Latin American)', 'el', 'EMR Name',                                                'Nombre EMR'),
 ('Spanish (Latin American)', 'el', 'ELIS ID',                                                 'ID ELIS'),
 ('Spanish (Latin American)', 'el', 'ELIS Name',                                               'Nombre ELIS'),
+('Spanish (Latin American)', 'el', 'LOINC',                                                   'LOINC'),
+('Spanish (Latin American)', 'el', 'SNOMED',                                                  'SNOMED'),
+('Spanish (Latin American)', 'el', 'Units',                                                   'Unidades'),
 ('Spanish (Latin American)', 'el', 'Status',                                                  'Estado'),
 ('Spanish (Latin American)', 'el', 'Actions',                                                 'Acciones'),
 
