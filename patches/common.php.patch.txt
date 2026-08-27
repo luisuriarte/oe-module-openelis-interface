@@ -9,9 +9,19 @@
 # INSTRUCTIONS:
 # 1. Backup your common.php file
 # 2. Open interface/forms/procedure_order/common.php
-# 3. Search for the marker line (see below)
-# 4. Insert the code block after it
-# 5. Test by opening an existing order in view mode
+# 3. Confirm these are ALREADY present (they are required by this patch):
+#    - use OpenEMR\Common\Csrf\CsrfUtils;         (line ~24, already present)
+#    - $session = SessionWrapperFactory::getInstance()->getActiveSession();  (line ~71, already present)
+#    - $row, $formid, $viewmode, $GLOBALS['webroot']   (already in scope)
+# 4. Search for the marker line (see below)
+# 5. Insert the code block after it
+# 6. Insert the JS function before the closing </script> tag
+# 7. Test by opening an existing order in view mode
+#
+# IMPORTANT: This patch uses OpenEMR's native CSRF (CsrfUtils::collectCsrfToken
+# with the default 'default' subject). It does NOT use any module helper
+# function. The module endpoint send_order_action.php verifies the token with
+# the same default subject, so they stay in sync.
 
 ## ============================================================
 ## STEP 1: Find this block (around line 1900-1904):
@@ -61,7 +71,7 @@
 #
 #             var formData = new FormData();
 #             formData.append('order_id', orderId);
-#             formData.append('csrf_token_form', <?php echo js_escape(oe_module_csrf_collect('OpenElisModule')); ?>);
+#             formData.append('csrf_token_form', <?php echo js_escape(CsrfUtils::collectCsrfToken(session: $session)); ?>);
 #             formData.append('action', 'send');
 #
 #             fetch(<?php echo js_escape($GLOBALS['webroot'] . '/interface/modules/custom_modules/openelis/public/send_order_action.php'); ?>, {

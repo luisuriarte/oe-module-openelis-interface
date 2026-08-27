@@ -47,7 +47,7 @@ if (!AclMain::aclCheckCore('admin', 'super')) {
 }
 
 // CSRF check
-if (!oe_module_csrf_verify($_POST['csrf_token_form'] ?? '', 'OpenElisModule')) {
+if (!oe_module_csrf_verify($_POST['csrf_token_form'] ?? '')) {
     http_response_code(403);
     echo json_encode(['success' => false, 'message' => xl('Invalid CSRF token')]);
     exit;

@@ -102,7 +102,7 @@ while ($row = sqlFetchArray($rs)) {
     $rows[] = $row;
 }
 
-$csrfToken = oe_module_csrf_collect('OpenElisModule');
+$csrfToken = oe_module_csrf_collect();
 $webRoot = $GLOBALS['webroot'] ?? '';
 ?>
 <!DOCTYPE html>
