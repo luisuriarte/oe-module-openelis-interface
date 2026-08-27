@@ -127,7 +127,7 @@ INSERT IGNORE INTO `lang_custom` (`lang_description`, `lang_code`, `constant_nam
 ('Spanish (Latin American)', 'el', 'Order not found',                                         'Orden no encontrada'),
 ('Spanish (Latin American)', 'el', 'No tests to send',                                       'No hay pruebas para enviar'),
 ('Spanish (Latin American)', 'el', 'No active lab provider configured for this order',        'No hay proveedor de laboratorio activo configurado para esta orden'),
-('Spanish (Latin American)', 'el', 'None of the tests have LOINC codes mapped. Please configure code mappings first.', 'Ninguna de las pruebas tiene códigos LOINC mapeados. Configure el mapeo de códigos primero.'),
+('Spanish (Latin American)', 'el', 'None of the tests have code mappings configured. Please configure code mappings first.', 'Ninguna de las pruebas tiene mapeo de códigos configurado. Configure el mapeo de códigos primero.'),
 ('Spanish (Latin American)', 'el', 'Skipped',                                                 'Omitidas'),
 ('Spanish (Latin American)', 'el', 'Order sent to OpenELIS successfully',                     'Orden enviada a OpenELIS correctamente'),
 ('Spanish (Latin American)', 'el', 'Error communicating with OpenELIS',                       'Error de comunicación con OpenELIS'),

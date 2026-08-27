@@ -107,7 +107,7 @@ class OrderSyncService
      * 2. Validate provider is active and configured
      * 3. Sync patient to OpenELIS
      * 4. Sync practitioner to OpenELIS
-     * 5. Build ServiceRequest + Specimen per test (skipping codes without LOINC)
+     * 5. Build ServiceRequest + Specimen per test (skipping unmapped codes)
      * 6. Send as FHIR Transaction Bundle
      * 7. Update procedure_order with sync status
      *
@@ -175,13 +175,17 @@ class OrderSyncService
 
             foreach ($codes as $code) {
                 $procedureCode = $code['procedure_code'] ?? '';
-                $loincCode = CodeMappingService::resolveLoincCode($procedureCode);
+                $openelisTestId = CodeMappingService::resolveOpenElisTestId($procedureCode);
 
-                if (empty($loincCode)) {
+                // Skip only if there's no mapping at all — neither an explicit
+                // openelis_test_id nor a procedure code that OpenELIS can resolve.
+                // resolveWithFallback() returns the raw procedure_code as last resort,
+                // but here we check whether a deliberate mapping exists.
+                if (empty($openelisTestId)) {
                     $skippedCodes[] = $code['procedure_name'] ?? $procedureCode;
                     error_log(
                         "OpenELIS sync: skipping test '$procedureCode' ("
-                        . ($code['procedure_name'] ?? '') . ") — no LOINC code mapped"
+                        . ($code['procedure_name'] ?? '') . ") — no code mapping configured"
                     );
                     continue;
                 }
@@ -209,7 +213,7 @@ class OrderSyncService
             if (empty($entries)) {
                 return [
                     'success' => false,
-                    'message' => xl('None of the tests have LOINC codes mapped. Please configure code mappings first.'),
+                    'message' => xl('None of the tests have code mappings configured. Please configure code mappings first.'),
                     'openelis_ids' => [],
                 ];
             }
@@ -229,17 +233,18 @@ class OrderSyncService
             }
 
             // 10. Mark order as synced
+            // Store the full OpenELIS resource reference (e.g. "ServiceRequest/<uuid>")
+            // in our own column. We deliberately do NOT reuse control_id, which is
+            // reserved for HL7 order/result message correlation.
             $firstId = $openelisIds[0] ?? '';
-            // external_id is varchar(20) — store a short reference
-            $externalRef = substr(str_replace('/', '-', $firstId), 0, 20);
 
             sqlStatement(
                 "UPDATE procedure_order
                  SET date_transmitted = NOW(),
                      mod_openelis_sync_status = 'sent',
-                     control_id = ?
+                     mod_openelis_order_id = ?
                  WHERE procedure_order_id = ?",
-                [$externalRef, $procedureOrderId]
+                [$firstId ?: null, $procedureOrderId]
             );
 
             $message = xl('Order sent to OpenELIS successfully');

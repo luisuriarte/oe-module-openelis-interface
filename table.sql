@@ -21,3 +21,8 @@ ALTER TABLE `procedure_order` ADD COLUMN `mod_openelis_sync_status`
     ENUM('pending','sent','error') DEFAULT NULL
     COMMENT 'OpenELIS sync: pending=sent, error=failed, NULL=not yet attempted';
 #EndIf
+
+#IfMissingColumn procedure_order mod_openelis_order_id
+ALTER TABLE `procedure_order` ADD COLUMN `mod_openelis_order_id` VARCHAR(64) DEFAULT NULL
+    COMMENT 'OpenELIS ServiceRequest ID returned after order transmission';
+#EndIf

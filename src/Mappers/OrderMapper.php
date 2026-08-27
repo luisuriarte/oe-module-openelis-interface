@@ -24,14 +24,14 @@ class OrderMapper
         string $openelisPractitionerRef
     ): array {
         $procedureCode = $orderCode['procedure_code'] ?? '';
-        $loincCode = CodeMappingService::resolveLoincCode($procedureCode);
+        $mapping = CodeMappingService::resolveMapping($procedureCode);
 
         $resource = [
             'resourceType' => 'ServiceRequest',
             'status' => 'active',
             'intent' => 'original-order',
             'priority' => self::mapPriority($procedureOrder['order_priority'] ?? ''),
-            'code' => self::buildCodeConcept($loincCode, $orderCode['procedure_name'] ?? ''),
+            'code' => self::buildCodeConcept($mapping, $orderCode['procedure_name'] ?? ''),
             'subject' => ['reference' => $openelisPatientRef],
             'requester' => ['reference' => $openelisPractitionerRef],
         ];
@@ -136,17 +136,43 @@ class OrderMapper
         };
     }
 
-    private static function buildCodeConcept(?string $loincCode, string $procedureName): array
+    /**
+     * Builds a FHIR CodeableConcept for ServiceRequest.code.
+     *
+     * Always includes the openelis_test_id (or procedure code fallback) as the
+     * primary coding — this is what OpenELIS uses to match against its test
+     * catalog. If a LOINC code is also mapped, it is added as a second coding
+     * entry within the same CodeableConcept (FHIR allows multiple codings).
+     *
+     * @param array|null $mapping  Full row from CodeMappingService::resolveMapping()
+     * @param string $procedureName  Human-readable test name
+     * @return array FHIR CodeableConcept
+     */
+    private static function buildCodeConcept(?array $mapping, string $procedureName): array
     {
-        $concept = [];
+        $codings = [];
 
-        if ($loincCode) {
-            $concept['coding'] = [
-                [
-                    'system' => 'http://loinc.org',
-                    'code' => $loincCode,
-                ],
+        // Primary: openelis_test_id (or raw procedure code as fallback)
+        $testId = $mapping['openelis_test_id'] ?? null;
+        if ($testId) {
+            $codings[] = [
+                'system' => 'http://openelis-global.org/testId',
+                'code' => $testId,
             ];
+        }
+
+        // Secondary: LOINC code if available
+        $loincCode = $mapping['loinc_code'] ?? null;
+        if ($loincCode) {
+            $codings[] = [
+                'system' => 'http://loinc.org',
+                'code' => $loincCode,
+            ];
+        }
+
+        $concept = [];
+        if ($codings) {
+            $concept['coding'] = $codings;
         }
 
         if ($procedureName) {
