@@ -76,11 +76,14 @@ openelis/
 │   ├── 📂 Client/                        # OpenElisApiClient (cURL FHIR client)
 │   ├── 📂 Mappers/                       # Patient/Practitioner/Order FHIR mappers
 │   └── 📂 Service/                       # Business services
+│       └── 🗄️ ProcedureCatalogImporter.php # CSV → procedure_type (grp + ord)
 │
 ├── 📂 public/                            # ⭐ Web scripts — copied to <openemr_root>/public/modules/openelis/
 │   ├── 🖥️ admin_mapping.php              # Admin UI for code mapping CRUD
 │   ├── 🖥️ pending_orders.php             # Pending orders + Send-to-OpenELIS UI
-│   └── 🖥️ send_order_action.php          # AJAX endpoint (POST → JSON)
+│   ├── 🖥️ send_order_action.php          # AJAX endpoint (POST → JSON)
+│   ├── 🗂️ catalog.csv                    # OpenELIS test catalog export (drop-in import)
+│   └── 🗂️ panels.csv                     # OpenELIS panel export (drop-in import)
 │
 ├── 📂 sql/
 │   └── 📄 lang_custom.sql                # Custom translations
@@ -122,7 +125,7 @@ OpenEMR root `public/modules/openelis/` folder.
 
    ```bash
    mkdir -p /var/www/html/origen.ar/hcd/public/modules/openelis
-   cp interface/modules/custom_modules/openelis/public/*.php \
+   cp interface/modules/custom_modules/openelis/public/* \
       /var/www/html/origen.ar/hcd/public/modules/openelis/
    ```
 
@@ -134,8 +137,9 @@ OpenEMR root `public/modules/openelis/` folder.
         -d "order_id=27" -d "action=send"
    ```
 
-4. After updating the module's `public/*.php`, re-copy them to the root
-   `public/modules/openelis/` folder so the deployed version stays in sync.
+4. After updating the module's `public/` folder (scripts and/or CSV exports),
+   re-copy its contents to the root `public/modules/openelis/` folder so the
+   deployed version stays in sync.
 
 ### URL map (production)
 
@@ -306,6 +310,41 @@ user/password, not database credentials):
 - LOINC is not provided by this endpoint, so it is optional / entered manually.
 - The prior design (reading OpenELIS's `clinlims.*` PostgreSQL tables directly)
   was abandoned because the lab does not share database credentials.
+
+### Importing the catalog into the procedure tree
+
+The REST `TestNamesProvider` endpoint returns only a test's **name** by id — it
+does not expose the **panel structure** or the **section grouping**. To build the
+OpenEMR procedure catalog faithfully, the lab exports the catalog as two CSV
+files that the admin drops next to the module's deployed scripts:
+
+| File | Columns | Purpose |
+|------|---------|---------|
+| `catalog.csv` | `test_id, test_name, loinc, section_name, is_active` | The tests, grouped by section |
+| `panels.csv`  | `panel_id, panel_name, test_id, test_name` | Panel composition (which test belongs to which panel) |
+
+From **OpenELIS Settings** → **Import catalog into lab procedures**, pick a lab
+provider (the `lab_id` stamped on imported rows) and import. The importer
+(`src/Service/ProcedureCatalogImporter.php`) builds the `procedure_type` tree:
+
+```
+grp  OES-<section>                        e.g. OES-hematology ("Hematology")
+  grp  OEP-<panel_id>                     e.g. OEP-2 ("NFS") nested in its section
+    ord  OE-<test_id>                     e.g. OE-13 (hangs from its panel)
+  ord  OE-<test_id>                       tests not in a panel hang from the section
+```
+
+Because `procedure_type` allows only **one parent per row**, a test hangs either
+from its panel or (if it belongs to no panel) directly from its section group.
+The LOINC column is stored in `procedure_type.standard_code` as `LOINC:<code>`.
+As a convenience, each test also gets a `mod_openelis_code_mapping` row
+(`OE-<test_id>` → `<test_id>`), so imported tests are immediately sendable.
+Re-importing updates rows in place (no duplicates).
+
+> ⚠️ In production the CSVs must be placed in the **same folder as the deployed
+> `openelis_config.php`** (i.e. `<root>/public/modules/openelis/`), because the
+> importer reads them relative to the script directory. In dev that is
+> `oe-module-openelis-interface/public/`.
 
 ### OpenELIS FHIR Capability Reference
 

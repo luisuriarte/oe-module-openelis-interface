@@ -76,11 +76,14 @@ openelis/
 │   ├── 📂 Client/                        # OpenElisApiClient (cliente cURL FHIR)
 │   ├── 📂 Mappers/                       # Mapeadores FHIR Patient/Practitioner/Order
 │   └── 📂 Service/                       # Servicios de negocio
+│       └── 🗄️ ProcedureCatalogImporter.php # CSV → procedure_type (grp + ord)
 │
 ├── 📂 public/                            # ⭐ Scripts web — se copian a <raiz_openemr>/public/modules/openelis/
 │   ├── 🖥️ admin_mapping.php              # Interfaz admin para CRUD de mapeo de códigos
 │   ├── 🖥️ pending_orders.php             # Órdenes pendientes + UI para enviar a OpenELIS
-│   └── 🖥️ send_order_action.php          # Endpoint AJAX (POST → JSON)
+│   ├── 🖥️ send_order_action.php          # Endpoint AJAX (POST → JSON)
+│   ├── 🗂️ catalog.csv                    # Export del catálogo de pruebas de OpenELIS (import directo)
+│   └── 🗂️ panels.csv                     # Export de paneles de OpenELIS (import directo)
 │
 ├── 📂 sql/
 │   └── 📄 lang_custom.sql                # Traducciones custom
@@ -122,7 +125,7 @@ los endpoints AJAX del módulo sean alcanzables, el contenido de `public/` debe
 
    ```bash
    mkdir -p /var/www/html/origen.ar/hcd/public/modules/openelis
-   cp interface/modules/custom_modules/openelis/public/*.php \
+   cp interface/modules/custom_modules/openelis/public/* \
       /var/www/html/origen.ar/hcd/public/modules/openelis/
    ```
 
@@ -134,8 +137,9 @@ los endpoints AJAX del módulo sean alcanzables, el contenido de `public/` debe
         -d "order_id=27" -d "action=send"
    ```
 
-4. Tras actualizar los `public/*.php` del módulo, volver a copiarlos a la raíz
-   `public/modules/openelis/` para que la versión desplegada quede sincronizada.
+4. Tras actualizar la carpeta `public/` del módulo (scripts y/o exports CSV),
+   volver a copiar su contenido a la raíz `public/modules/openelis/` para que la
+   versión desplegada quede sincronizada.
 
 ### Mapa de URLs (producción)
 
@@ -306,6 +310,43 @@ solo un usuario/clave de API, no credenciales de base de datos):
 - El LOINC no lo entrega este endpoint, por lo que es opcional / se ingresa a mano.
 - El diseño previo (leer las tablas `clinlims.*` de PostgreSQL de OpenELIS
   directamente) se descartó porque el laboratorio no comparte credenciales de BD.
+
+### Importar el catálogo al árbol de procedimientos
+
+El endpoint REST `TestNamesProvider` devuelve solo el **nombre** de una prueba por
+id — no expone la **estructura de paneles** ni la **agrupación por sección**. Para
+armar el catálogo de procedimientos de OpenEMR fielmente, el laboratorio exporta
+el catálogo en dos archivos CSV que el admin deja junto a los scripts desplegados
+del módulo:
+
+| Archivo | Columnas | Propósito |
+|---------|----------|-----------|
+| `catalog.csv` | `test_id, test_name, loinc, section_name, is_active` | Las pruebas, agrupadas por sección |
+| `panels.csv`  | `panel_id, panel_name, test_id, test_name` | Composición de paneles (qué prueba pertenece a qué panel) |
+
+Desde **Configuración OpenELIS** → **Importar catálogo en procedimientos de
+laboratorio**, se elige un proveedor de laboratorio (el `lab_id` que se estampa en
+las filas importadas) y se importa. El importador
+(`src/Service/ProcedureCatalogImporter.php`) arma el árbol `procedure_type`:
+
+```
+grp  OES-<sección>                       ej. OES-hematology ("Hematology")
+  grp  OEP-<id_panel>                    ej. OEP-2 ("NFS") anidado en su sección
+    ord  OE-<id_test>                    ej. OE-13 (cuelga de su panel)
+  ord  OE-<id_test>                      los tests fuera de panel cuelgan de la sección
+```
+
+Como `procedure_type` solo admite **un padre por fila**, cada prueba cuelga de su
+panel o (si no pertenece a ningún panel) directamente de su grupo de sección. El
+LOINC se guarda en `procedure_type.standard_code` como `LOINC:<código>`. Como
+conveniencia, cada prueba también recibe una fila en `mod_openelis_code_mapping`
+(`OE-<id_test>` → `<id_test>`), así los tests importados quedan listos para
+enviar. Re-importar actualiza las filas existentes (no duplica).
+
+> ⚠️ En producción los CSV deben colocarse en la **misma carpeta que el
+> `openelis_config.php` desplegado** (es decir `<raiz>/public/modules/openelis/`),
+> porque el importador los lee relativo al directorio del script. En dev eso es
+> `oe-module-openelis-interface/public/`.
 
 ### Referencia de capacidades FHIR de OpenELIS
 

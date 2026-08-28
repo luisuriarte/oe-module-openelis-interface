@@ -92,6 +92,7 @@ if (!AclMain::aclCheckCore('admin', 'super')) {
 }
 
 use OpenEMR\Modules\OpenElis\Catalog\OpenElisCatalog;
+use OpenEMR\Modules\OpenElis\Service\ProcedureCatalogImporter;
 
 // ── Load current config ─────────────────────────────────────────────────
 $current = [];
@@ -100,11 +101,21 @@ while ($row = sqlFetchArray($rs)) {
     $current[$row['cfg_name']] = $row['cfg_value'];
 }
 
+// Spatial providers (procedure_providers) available as the lab target (lab_id)
+// for imported procedures.
+$providers = [];
+$rsProviders = sqlStatement(
+    "SELECT ppid, name, protocol FROM procedure_providers WHERE active = 1 ORDER BY name"
+);
+while ($row = sqlFetchArray($rsProviders)) {
+    $providers[] = $row;
+}
+
 $message = '';
 $messageClass = '';
 
-// ── Sync catalog immediately ────────────────────────────────────────────
-if (isset($_POST['action']) && $_POST['action'] === 'sync_catalog') {
+// ── Sync catalog immediately (REST names → local mirror) ────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'sync_catalog') {
     if (!oe_module_csrf_verify($_POST['csrf_token_form'] ?? '', 'default')) {
         CsrfUtils::csrfNotVerified();
     }
@@ -121,6 +132,37 @@ if (isset($_POST['action']) && $_POST['action'] === 'sync_catalog') {
     } catch (\Exception $e) {
         $message = xl('Catalog sync failed') . ': ' . $e->getMessage();
         $messageClass = 'text-danger';
+    }
+}
+
+// ── Import catalog from CSV into procedure_type (grp + ord) ─────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'import_csv') {
+    if (!oe_module_csrf_verify($_POST['csrf_token_form'] ?? '', 'default')) {
+        CsrfUtils::csrfNotVerified();
+    }
+
+    $labId = (int)($_POST['lab_id'] ?? 0);
+    if ($labId <= 0) {
+        $message = xl('Select a lab provider to import the catalog for.');
+        $messageClass = 'text-danger';
+    } else {
+        try {
+            // CSV files are dropped next to this script in the deployed
+            // public/modules/openelis/ folder (also works in dev /public/).
+            $importer = new ProcedureCatalogImporter(__DIR__, $labId);
+            $result = $importer->import();
+            $summary = xl('Catalog imported') . ': ' . $result['sections'] . ' ' . xl('groups')
+                . ', ' . $result['panels'] . ' ' . xl('panels') . ', ' . $result['tests'] . ' '
+                . xl('tests') . ', ' . $result['mappings'] . ' ' . xl('mappings');
+            if (!empty($result['warnings'])) {
+                $summary .= ' ' . xl('Warnings') . ': ' . implode('; ', array_slice($result['warnings'], 0, 5));
+            }
+            $message = $summary;
+            $messageClass = $result['warnings'] ? 'text-warning' : 'text-success';
+        } catch (\Exception $e) {
+            $message = xl('Catalog import failed') . ': ' . $e->getMessage();
+            $messageClass = 'text-danger';
+        }
     }
 }
 
@@ -217,6 +259,44 @@ $webRoot = $GLOBALS['webroot'] ?? '';
                         <input type="hidden" name="action" value="sync_catalog">
                         <button type="submit" class="btn btn-primary"><?php echo xlt("Sync now"); ?></button>
                     </form>
+                </div>
+            </div>
+
+            <!-- Import catalog from CSV into procedure_type -->
+            <div class="card mb-4">
+                <div class="card-body">
+                    <h5><?php echo xlt("Import catalog into lab procedures"); ?></h5>
+                    <p class="cfg-hint">
+                        <?php echo xlt("Reads catalog.csv and panels.csv from this module's public folder and creates the lab procedure tree (groups + orderable tests) in the OpenEMR procedure catalog, tagged with the selected lab provider."); ?>
+                    </p>
+                    <form method="post" action="openelis_config.php" class="row g-2 align-items-end">
+                        <input type="hidden" name="csrf_token_form" value="<?php echo attr($csrfToken); ?>">
+                        <input type="hidden" name="action" value="import_csv">
+                        <div class="col-md-5">
+                            <label class="form-label"><?php echo xlt("Lab provider (lab_id)"); ?></label>
+                            <select name="lab_id" class="form-select" required>
+                                <option value=""><?php echo xlt("Select a provider..."); ?></option>
+                                <?php foreach ($providers as $p): ?>
+                                    <option value="<?php echo attr($p['ppid']); ?>">
+                                        <?php echo text($p['name'] . ($p['protocol'] ? ' (' . $p['protocol'] . ')' : '')); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label"><?php echo xlt("CSV files"); ?></label>
+                            <input type="text" class="form-control" readonly
+                                   value="<?php echo attr(ProcedureCatalogImporter::CATALOG_FILE . ' / ' . ProcedureCatalogImporter::PANELS_FILE); ?>">
+                        </div>
+                        <div class="col-md-3">
+                            <button type="submit" class="btn btn-success w-100"><?php echo xlt("Import CSV"); ?></button>
+                        </div>
+                    </form>
+                    <?php if (empty($providers)): ?>
+                        <div class="alert alert-warning mt-2 mb-0">
+                            <?php echo xlt("No active lab providers found. Configure one in the lab providers section first."); ?>
+                        </div>
+                    <?php endif; ?>
                 </div>
             </div>
 
