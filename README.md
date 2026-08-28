@@ -289,12 +289,32 @@ This module follows OpenEMR's custom module standards:
 
 ### OpenELIS Global 2 Reference
 
-| Entity | Table | ID Field | Name Resolution |
-|--------|-------|----------|-----------------|
-| Test | `clinlims.test` | `id` (numeric string) | `name_localization_id` → `description` fallback |
-| Test Section | `clinlims.test_section` | `id` (numeric string) | `name_localization_id` → `description` fallback |
+The test catalog is read over the HTTPS REST API (the lab provides only an API
+user/password, not database credentials):
 
-> ⚠️ **Note:** OpenELIS test names are localized via the `localization` table. The `description` column serves as a fallback when no localized name exists.
+| Endpoint | Method | Notes |
+|----------|--------|-------|
+| `/OpenELIS-Global/rest/TestNamesProvider?testId={id}` | GET | Returns one test's name (`name.spanish` / `name.english`) for a single numeric id. `testId=all` → HTTP 500, so ids are probed one by one across a configurable range. Does NOT return LOINC. |
+
+- The synchronizer (`src/Catalog/OpenElisCatalog.php`) is triggered from
+  **OpenELIS Settings** (`public/openelis_config.php`). It iterates the
+  configured id range and stores results in the local mirror table
+  `mod_openelis_test_catalog`.
+- The mapping page (`public/admin_mapping.php`) reads that local mirror to
+  autosuggest the OpenELIS test id/name when assigning a mapping — no per-keystroke
+  API calls.
+- LOINC is not provided by this endpoint, so it is optional / entered manually.
+- The prior design (reading OpenELIS's `clinlims.*` PostgreSQL tables directly)
+  was abandoned because the lab does not share database credentials.
+
+### OpenELIS FHIR Capability Reference
+
+OpenELIS Global 2 (Development-Class) exposes a subset of HAPI FHIR R4 resources:
+`DiagnosticReport, Observation, Organization, Patient, Practitioner,
+ServiceRequest, Specimen`. It does **not** expose a test-catalog resource
+(`ObservationDefinition` is unknown; `Observation`/`ServiceRequest` are used for
+results/orders only), which is why the catalog is fetched via the REST provider
+above.
 
 ---
 

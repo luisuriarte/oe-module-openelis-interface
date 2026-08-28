@@ -89,6 +89,21 @@ if (!AclMain::aclCheckCore('admin', 'super')) {
     exit;
 }
 
+use OpenEMR\Modules\OpenElis\Catalog\OpenElisCatalog;
+
+// Load the local OpenELIS test-catalog mirror for autosuggestion. If the
+// mirror is empty (not yet synced), show a hint linking to the settings page.
+$catalogRows = [];
+$catalogCount = 0;
+try {
+    $catalog = new OpenElisCatalog();
+    $catalogRows = $catalog->searchTests(null, 2000);
+    $catalogCount = count($catalogRows);
+} catch (\Exception $e) {
+    // Mirror table may not exist yet; the page still works minus autosuggest.
+    error_log("OpenELIS catalog autosuggest unavailable: " . $e->getMessage());
+}
+
 $perPage = 20;
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $page_unmapped = max(1, (int)($_GET['page_unmapped'] ?? 1));
@@ -325,12 +340,13 @@ $webRoot = $GLOBALS['webroot'] ?? '';
                                     <div class="row g-2 align-items-end">
                                         <div class="col-auto">
                                             <label class="form-label small"><?php echo xlt("OpenELIS Test ID"); ?></label>
-                                            <input type="text" class="form-control form-control-sm" name="openelis_test_id" required
+                                            <input type="text" class="form-control form-control-sm openelis-test-id" name="openelis_test_id"
+                                                   list="openelis-catalog" required
                                                    placeholder="<?php echo attr("e.g., 42"); ?>">
                                         </div>
                                         <div class="col-auto">
                                             <label class="form-label small"><?php echo xlt("OpenELIS Test Name"); ?></label>
-                                            <input type="text" class="form-control form-control-sm" name="openelis_test_name"
+                                            <input type="text" class="form-control form-control-sm openelis-test-name" name="openelis_test_name"
                                                    placeholder="<?php echo attr("e.g., Glucose"); ?>">
                                         </div>
                                         <div class="col-auto">
@@ -465,12 +481,13 @@ $webRoot = $GLOBALS['webroot'] ?? '';
                                     <div class="row g-2 align-items-end">
                                         <div class="col-auto">
                                             <label class="form-label small"><?php echo xlt("OpenELIS Test ID"); ?></label>
-                                            <input type="text" class="form-control form-control-sm" name="openelis_test_id" required
+                                            <input type="text" class="form-control form-control-sm openelis-test-id" name="openelis_test_id"
+                                                   list="openelis-catalog" required
                                                    value="<?php echo attr($row['openelis_test_id']); ?>">
                                         </div>
                                         <div class="col-auto">
                                             <label class="form-label small"><?php echo xlt("OpenELIS Test Name"); ?></label>
-                                            <input type="text" class="form-control form-control-sm" name="openelis_test_name"
+                                            <input type="text" class="form-control form-control-sm openelis-test-name" name="openelis_test_name"
                                                    value="<?php echo attr($row['openelis_test_name'] ?? ''); ?>">
                                         </div>
                                         <div class="col-auto">
@@ -531,6 +548,23 @@ $webRoot = $GLOBALS['webroot'] ?? '';
         <?php endif; ?>
     </div>
 
+    <!-- ── Catalog autosuggest datalist ──────────────────────────────── -->
+    <?php if ($catalogCount > 0): ?>
+    <datalist id="openelis-catalog">
+        <?php foreach ($catalogRows as $cat): ?>
+            <option value="<?php echo attr($cat['openelis_test_id']); ?>"
+                    data-test-name="<?php echo attr($cat['name_es'] ?: $cat['name_en']); ?>"></option>
+        <?php endforeach; ?>
+    </datalist>
+    <?php endif; ?>
+
+    <?php if ($catalogCount === 0): ?>
+        <div class="alert alert-warning">
+            <?php echo xlt("The OpenELIS test catalog is empty. Synchronize it first from"); ?>
+            <a href="<?php echo attr($webRoot . '/public/modules/openelis/openelis_config.php'); ?>"><?php echo xlt("OpenELIS Settings"); ?></a>.
+        </div>
+    <?php endif; ?>
+
 <script>
 function toggleRow(id) {
     var el = document.getElementById(id);
@@ -538,6 +572,35 @@ function toggleRow(id) {
         el.classList.toggle('open');
     }
 }
+
+// ── OpenELIS test catalog autosuggestion ────────────────────────────────
+// When the user picks (or types) an OpenELIS test id from the datalist,
+// auto-fill the sibling OpenELIS test name field in the same form row.
+document.addEventListener('change', function (e) {
+    var idInput = e.target.closest('.openelis-test-id');
+    if (!idInput) {
+        return;
+    }
+    var datalist = document.getElementById('openelis-catalog');
+    if (!datalist) {
+        return;
+    }
+    var picked = null;
+    var opts = datalist.options;
+    for (var i = 0; i < opts.length; i++) {
+        if (opts[i].value === idInput.value) {
+            picked = opts[i].getAttribute('data-test-name');
+            break;
+        }
+    }
+    if (picked) {
+        var row = idInput.closest('form');
+        var nameInput = row ? row.querySelector('.openelis-test-name') : null;
+        if (nameInput && nameInput.value === '') {
+            nameInput.value = picked;
+        }
+    }
+});
 
 // ── Native OpenEMR Code Finder integration ──────────────────────────────
 var _oeCodeTarget = null;

@@ -289,12 +289,32 @@ Este módulo sigue los estándares de módulos custom de OpenEMR:
 
 ### Referencia de OpenELIS Global 2
 
-| Entidad | Tabla | Campo ID | Resolución de nombre |
-|---------|-------|----------|---------------------|
-| Prueba | `clinlims.test` | `id` (string numérico) | `name_localization_id` → fallback a `description` |
-| Sección de prueba | `clinlims.test_section` | `id` (string numérico) | `name_localization_id` → fallback a `description` |
+El catálogo de pruebas se lee por la API REST sobre HTTPS (el laboratorio entrega
+solo un usuario/clave de API, no credenciales de base de datos):
 
-> ⚠️ **Nota:** Los nombres de pruebas en OpenELIS están localizados vía la tabla `localization`. La columna `description` sirve como fallback cuando no hay nombre localizado.
+| Endpoint | Método | Notas |
+|----------|--------|-------|
+| `/OpenELIS-Global/rest/TestNamesProvider?testId={id}` | GET | Devuelve el nombre de UNA prueba (`name.spanish` / `name.english`) para un solo id numérico. `testId=all` → HTTP 500, por lo que los ids se sondean de a uno en un rango configurable. NO devuelve LOINC. |
+
+- El sincronizador (`src/Catalog/OpenElisCatalog.php`) se dispara desde
+  **Configuración OpenELIS** (`public/openelis_config.php`). Recorre el rango de
+  ids configurado y guarda los resultados en la tabla espejo local
+  `mod_openelis_test_catalog`.
+- La página de mapeo (`public/admin_mapping.php`) lee ese espejo local para
+  autosugerir el id/nombre de prueba de OpenELIS al asignar un mapeo — sin llamadas
+  a la API por cada tecla.
+- El LOINC no lo entrega este endpoint, por lo que es opcional / se ingresa a mano.
+- El diseño previo (leer las tablas `clinlims.*` de PostgreSQL de OpenELIS
+  directamente) se descartó porque el laboratorio no comparte credenciales de BD.
+
+### Referencia de capacidades FHIR de OpenELIS
+
+OpenELIS Global 2 (Development-Class) expone un subconjunto de recursos HAPI FHIR
+R4: `DiagnosticReport, Observation, Organization, Patient, Practitioner,
+ServiceRequest, Specimen`. NO expone un recurso de catálogo de pruebas
+(`ObservationDefinition` es desconocido; `Observation`/`ServiceRequest` son solo
+para resultados/órdenes), por eso el catálogo se obtiene vía el proveedor REST de
+arriba.
 
 ---
 

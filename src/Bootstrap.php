@@ -44,6 +44,11 @@ class Bootstrap
                 'label' => xlt("OpenELIS Code Mapping"),
                 'url' => $scriptsUrl . 'admin_mapping.php',
             ],
+            [
+                'menu_id' => 'mod2',
+                'label' => xlt("OpenELIS Settings"),
+                'url' => $scriptsUrl . 'openelis_config.php',
+            ],
         ];
 
         foreach ($menu as $item) {
