@@ -17,6 +17,7 @@
 - [ Features](#-features)
 - [ Architecture](#-architecture)
 - [ Directory Structure](#-directory-structure)
+- [ Deployment](#-deployment)
 - [ Installation](#-installation)
 - [ Code Mapping](#-code-mapping)
 - [ API Usage](#-api-usage)
@@ -71,23 +72,86 @@ openelis/
 ├── 📂 src/
 │   ├── 🔧 Bootstrap.php                  # Menu registration + event listeners
 │   ├── 🔧 CodeMappingService.php         # Reusable code mapping queries
-│   ├── 📂 Client/                        # REST client (planned)
-│   ├── 📂 Mappers/                       # Data mappers (planned)
-│   └── 📂 Service/                       # Business services (planned)
+│   ├── 🔧 OrderSyncService.php           # syncPatient/syncPractitioner/sendOrder services
+│   ├── 📂 Client/                        # OpenElisApiClient (cURL FHIR client)
+│   ├── 📂 Mappers/                       # Patient/Practitioner/Order FHIR mappers
+│   └── 📂 Service/                       # Business services
 │
-├── 📂 public/
+├── 📂 public/                            # ⭐ Web scripts — copied to <openemr_root>/public/modules/openelis/
 │   ├── 🖥️ admin_mapping.php              # Admin UI for code mapping CRUD
-│   └── 🖥️ order_status_view.php          # Order status view (planned)
+│   ├── 🖥️ pending_orders.php             # Pending orders + Send-to-OpenELIS UI
+│   └── 🖥️ send_order_action.php          # AJAX endpoint (POST → JSON)
 │
-├── 📂 config/
-│   └── ⚙️ openelis_config.php            # Module configuration
+├── 📂 sql/
+│   └── 📄 lang_custom.sql                # Custom translations
 │
-├── 📂 api/
-│   └── 🔗 webhook_results.php            # Results webhook endpoint (planned)
+├── 📂 patches/
+│   └── 📄 common.php.patch.txt           # Optional patch for order form Send button
 │
 ├── 📄 README.md                          # This file (English)
 └── 📄 README_es.md                       # Documentation (Spanish)
 ```
+
+> ⭐ **IMPORTANT:** The files under `public/` are the only ones that must be
+> directly reachable by the web server. OpenEMR's own `interface/` tree is
+> protected and does not serve arbitrary module scripts, so in production the
+> contents of `public/` are **copied** to the OpenEMR root
+> `public/modules/openelis/` folder.
+> See [Deployment](#-deployment).
+
+---
+
+## 🚀 Deployment
+
+OpenEMR's `interface/` tree is protected by the web server and **does not serve
+arbitrary module scripts reachable by URL**. To make the module's web pages and
+AJAX endpoints reachable, the contents of `public/` must be **copied** into the
+OpenEMR root `public/modules/openelis/` folder.
+
+> 💡 **Why not point at the module folder?** nginx (and OpenEMR's security
+> layer) will 404 or redirect any module script requested via
+> `interface/modules/custom_modules/...`. The scripts `bootstrap` by walking up
+> until they find `globals.php`, so they work correctly from the root
+> `public/modules/openelis/` folder.
+
+### Steps
+
+1. Install the module (see [Installation](#-installation)).
+2. **Copy the web scripts** to the OpenEMR root `public/modules/openelis/`
+   folder:
+
+   ```bash
+   mkdir -p /var/www/html/origen.ar/hcd/public/modules/openelis
+   cp interface/modules/custom_modules/openelis/public/*.php \
+      /var/www/html/origen.ar/hcd/public/modules/openelis/
+   ```
+
+3. **Verify** the endpoints respond (no 404). Test the AJAX endpoint from the
+   server console:
+
+   ```bash
+   curl -s -X POST "https://hcd.origen.ar/public/modules/openelis/send_order_action.php" \
+        -d "order_id=27" -d "action=send"
+   ```
+
+4. After updating the module's `public/*.php`, re-copy them to the root
+   `public/modules/openelis/` folder so the deployed version stays in sync.
+
+### URL map (production)
+
+| Script | Production URL |
+|--------|----------------|
+| `send_order_action.php` | `https://hcd.origen.ar/public/modules/openelis/send_order_action.php` |
+| `pending_orders.php`    | `https://hcd.origen.ar/public/modules/openelis/pending_orders.php` |
+| `admin_mapping.php`     | `https://hcd.origen.ar/public/modules/openelis/admin_mapping.php` |
+
+> ⚠️ **Root detection:** The scripts locate OpenEMR's `globals.php` automatically
+> by walking up from their own directory. They check both `<dir>/globals.php` and
+> `<dir>/interface/globals.php` at each level, so they work whether `globals.php`
+> sits at the OpenEMR root or (as in this deployment) under the root's
+> `interface/` folder. This also works from the module folder (dev) or the root
+> `public/modules/<name>/` folder (prod), so no code change is needed between
+> environments.
 
 ---
 
@@ -217,7 +281,9 @@ This module follows OpenEMR's custom module standards:
 - ✅ `table.sql` with `#IfNotTable` directives for idempotent migrations
 - ✅ `openemr.bootstrap.php` for namespace registration
 - ✅ `ModuleManagerListener` extending `AbstractModuleActionListener`
-- ✅ `globals.php` include path: `dirname(__FILE__, 6)`
+- ✅ `globals.php` include path: auto-detected by the web scripts (they walk up
+  their own directory until `globals.php` is found, so they work from the module
+  folder or the root `public/` folder) — see [Deployment](#-deployment)
 - ✅ All text translatable via `xlt()` / `xl()` functions
 - ✅ No direct PDO/mysqli — uses `sqlQuery()` / `sqlStatement()` layer
 

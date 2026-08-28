@@ -28,20 +28,21 @@ class Bootstrap
     {
         $menu = $event->getMenu();
 
-        // Compute module URL relative to __DIR__ (src/) so it works regardless of directory name.
-        // __DIR__ = .../openelis/src → two levels up = module root
-        $modulePath = '/interface/modules/custom_modules/' . basename(dirname(__DIR__)) . '/public/';
+        // In production the web scripts are copied to <openemr_root>/public/,
+        // so URLs resolve to {webroot}/public/{script}.
+        $webroot = $GLOBALS['webroot'] ?? '';
+        $scriptsUrl = $webroot . '/public/modules/openelis/';
 
         $menuItems = [
             [
                 'menu_id' => 'mod1',
                 'label' => xlt("Pending Orders"),
-                'url' => $modulePath . 'pending_orders.php',
+                'url' => $scriptsUrl . 'pending_orders.php',
             ],
             [
                 'menu_id' => 'mod0',
                 'label' => xlt("OpenELIS Code Mapping"),
-                'url' => $modulePath . 'admin_mapping.php',
+                'url' => $scriptsUrl . 'admin_mapping.php',
             ],
         ];
 

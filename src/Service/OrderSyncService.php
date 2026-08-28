@@ -122,6 +122,8 @@ class OrderSyncService
             [$procedureOrderId]
         );
 
+        error_log("OpenELIS sendOrderToOpenElis() called for order #$procedureOrderId, lab_id=" . ($order['lab_id'] ?? '?'));
+
         if (empty($order)) {
             return ['success' => false, 'message' => xl('Order not found'), 'openelis_ids' => []];
         }
@@ -150,6 +152,15 @@ class OrderSyncService
             return [
                 'success' => false,
                 'message' => xl('No active lab provider configured for this order'),
+                'openelis_ids' => [],
+            ];
+        }
+
+        // OpenELIS requires protocol = 'WS' (Web Services) to send orders.
+        if (($provider['protocol'] ?? '') !== 'WS') {
+            return [
+                'success' => false,
+                'message' => xl('Lab provider protocol must be set to Web Services (WS) to send orders via OpenELIS'),
                 'openelis_ids' => [],
             ];
         }

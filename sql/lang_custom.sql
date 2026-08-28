@@ -137,6 +137,7 @@ INSERT IGNORE INTO `lang_custom` (`lang_description`, `lang_code`, `constant_nam
 ('Spanish (Latin American)', 'el', 'Invalid CSRF token',                                      'Token CSRF inválido'),
 ('Spanish (Latin American)', 'el', 'Invalid order ID',                                        'ID de orden inválido'),
 ('Spanish (Latin American)', 'el', 'Lab provider is inactive',                                'El proveedor de laboratorio está inactivo'),
+('Spanish (Latin American)', 'el', 'Lab provider protocol must be set to Web Services (WS) to send orders via OpenELIS', 'El protocolo del proveedor de laboratorio debe configurarse como Web Services (WS) para enviar órdenes vía OpenELIS'),
 ('Spanish (Latin American)', 'el', 'Internal error',                                          'Error interno');
 
 -- ============================================================================

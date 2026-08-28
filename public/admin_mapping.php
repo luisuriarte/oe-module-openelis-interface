@@ -8,7 +8,54 @@
  * @license https://github.com/openemr/openemr/blob/master/LICENSE GNU General Public License 3
  */
 
-require_once dirname(__FILE__, 5) . '/globals.php';
+// Resolve the OpenEMR root by walking up until globals.php is found.
+// Works both in the module (dev) and when copied to <root>/public/modules/<name>/ (prod).
+// Peers with the same resolver in pending_orders.php and send_order_action.php.
+//
+// This deployment keeps OpenEMR's globals.php under <root>/interface/globals.php
+// (the OpenEMR web root is <root>/interface/), while the module's web scripts
+// are copied to the sibling <root>/public/modules/<name>/. Because public/ and
+// interface/ are siblings, we check BOTH "<dir>/globals.php" and
+// "<dir>/interface/globals.php" at each level of the upward walk.
+$__oeRoot = __DIR__;
+$__found = null;
+for ($i = 0; $i < 15; $i++) {
+    $__probeRoot = $__oeRoot . '/globals.php';
+    $__probeIface = $__oeRoot . '/interface/globals.php';
+    if (file_exists($__probeRoot) || is_file($__probeRoot) || (realpath($__probeRoot) !== false)) {
+        $__found = $__oeRoot;
+        break;
+    }
+    if (file_exists($__probeIface) || is_file($__probeIface) || (realpath($__probeIface) !== false)) {
+        $__found = $__oeRoot . '/interface';
+        break;
+    }
+    $parent = dirname($__oeRoot);
+    if ($parent === $__oeRoot) {
+        break;
+    }
+    $__oeRoot = $parent;
+}
+if ($__found === null) {
+    $__guesses = [];
+    foreach ([dirname(__DIR__, 3), dirname(__DIR__, 4), dirname(__DIR__, 5)] as $__g) {
+        $__guesses[] = $__g . '/interface';
+        $__guesses[] = $__g;
+    }
+    foreach ($__guesses as $__g) {
+        if (file_exists($__g . '/globals.php')) {
+            $__found = $__g;
+            break;
+        }
+    }
+}
+if ($__found === null) {
+    error_log("OpenELIS ERROR: could not locate globals.php from __DIR__=" . __DIR__);
+    die('OpenEMR root not found');
+}
+require_once $__found . '/globals.php';
+unset($__found, $__oeRoot, $__probeRoot, $__probeIface, $__g, $__guesses);
+unset($__oeRoot);
 
 use OpenEMR\Common\Acl\AclMain;
 use OpenEMR\Common\Csrf\CsrfUtils;

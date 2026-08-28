@@ -22,6 +22,14 @@
 # with the default 'default' subject). It does NOT use any module helper
 # function. The module endpoint send_order_action.php verifies the token with
 # the same default subject, so they stay in sync.
+#
+# IMPORTANT (deployment): The OpenELIS web scripts (send_order_action.php,
+# pending_orders.php, admin_mapping.php) are served from <openemr_root>/public/
+# in production. Copy the module's public/ contents there, under the module
+# subfolder:
+#   mkdir -p <openemr_root>/public/modules/openelis
+#   cp <module>/public/*.php  <openemr_root>/public/modules/openelis/
+# The URLs below point to {webroot}/public/modules/openelis/ accordingly.
 
 ## ============================================================
 ## STEP 1: Find this block (around line 1900-1904):
@@ -38,7 +46,7 @@
 ## ============================================================
 #
 #                                     <?php if ($viewmode && empty($row['date_transmitted'])) { ?>
-#                                     <a href="<?php echo $GLOBALS['webroot']; ?>/interface/modules/custom_modules/openelis/public/send_order_action.php?order_id=<?php echo attr($formid); ?>"
+#                                     <a href="<?php echo $GLOBALS['webroot']; ?>/public/modules/openelis/send_order_action.php?order_id=<?php echo attr($formid); ?>"
 #                                        class="btn btn-info btn-openelis-send"
 #                                        onclick="event.preventDefault(); sendOrderToOpenELIS(this, <?php echo attr($formid); ?>);"
 #                                        title="<?php echo xla('Send this order to OpenELIS via FHIR'); ?>">
@@ -49,7 +57,7 @@
 #                                         ✓ <?php echo xlt('Sent to OpenELIS'); ?>
 #                                     </button>
 #                                     <?php } elseif ($viewmode && ($row['mod_openelis_sync_status'] ?? '') === 'error') { ?>
-#                                     <a href="<?php echo $GLOBALS['webroot']; ?>/interface/modules/custom_modules/openelis/public/send_order_action.php?order_id=<?php echo attr($formid); ?>"
+#                                     <a href="<?php echo $GLOBALS['webroot']; ?>/public/modules/openelis/send_order_action.php?order_id=<?php echo attr($formid); ?>"
 #                                        class="btn btn-warning btn-openelis-send"
 #                                        onclick="event.preventDefault(); sendOrderToOpenELIS(this, <?php echo attr($formid); ?>);"
 #                                        title="<?php echo xla('Retry sending to OpenELIS'); ?>">
@@ -74,12 +82,17 @@
 #             formData.append('csrf_token_form', <?php echo js_escape(CsrfUtils::collectCsrfToken(session: $session)); ?>);
 #             formData.append('action', 'send');
 #
-#             fetch(<?php echo js_escape($GLOBALS['webroot'] . '/interface/modules/custom_modules/openelis/public/send_order_action.php'); ?>, {
+#             fetch(<?php echo js_escape($GLOBALS['webroot'] . '/public/modules/openelis/send_order_action.php'); ?>, {
 #                 method: 'POST',
 #                 body: formData,
 #                 credentials: 'same-origin'
 #             })
-#             .then(function(r) { return r.json(); })
+#             .then(function(r) {
+#                 if (!r.ok) {
+#                     return r.json().catch(function() { throw new Error('HTTP ' + r.status); });
+#                 }
+#                 return r.json();
+#             })
 #             .then(function(data) {
 #                 if (data.success) {
 #                     btn.outerHTML = '<button type="button" class="btn btn-outline-info" disabled>✓ ' + <?php echo xlj("Sent to OpenELIS"); ?> + '</button>';
@@ -91,7 +104,8 @@
 #                 }
 #             })
 #             .catch(function(err) {
-#                 alert(<?php echo xlj("Connection error"); ?>);
+#                 alert('Error de envío: ' + (err && err.message ? err.message : 'desconocido'));
+#                 console.error('OpenELIS send error:', err);
 #                 btn.disabled = false;
 #                 btn.innerHTML = origText;
 #             });

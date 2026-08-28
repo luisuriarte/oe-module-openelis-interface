@@ -17,6 +17,7 @@
 - [ Características](#-características)
 - [ Arquitectura](#-arquitectura)
 - [ Estructura de directorios](#-estructura-de-directorios)
+- [ Despliegue](#-despliegue)
 - [ Instalación](#-instalación)
 - [ Mapeo de códigos](#-mapeo-de-códigos)
 - [ Uso de la API](#-uso-de-la-api)
@@ -71,23 +72,86 @@ openelis/
 ├── 📂 src/
 │   ├── 🔧 Bootstrap.php                  # Registro de menú + listeners de eventos
 │   ├── 🔧 CodeMappingService.php         # Consultas reutilizables de mapeo de códigos
-│   ├── 📂 Client/                        # Cliente REST (próximamente)
-│   ├── 📂 Mappers/                       # Mapeadores de datos (próximamente)
-│   └── 📂 Service/                       # Servicios de negocio (próximamente)
+│   ├── 🔧 OrderSyncService.php           # Servicios syncPatient/syncPractitioner/sendOrder
+│   ├── 📂 Client/                        # OpenElisApiClient (cliente cURL FHIR)
+│   ├── 📂 Mappers/                       # Mapeadores FHIR Patient/Practitioner/Order
+│   └── 📂 Service/                       # Servicios de negocio
 │
-├── 📂 public/
+├── 📂 public/                            # ⭐ Scripts web — se copian a <raiz_openemr>/public/modules/openelis/
 │   ├── 🖥️ admin_mapping.php              # Interfaz admin para CRUD de mapeo de códigos
-│   └── 🖥️ order_status_view.php          # Vista de estado de órdenes (próximamente)
+│   ├── 🖥️ pending_orders.php             # Órdenes pendientes + UI para enviar a OpenELIS
+│   └── 🖥️ send_order_action.php          # Endpoint AJAX (POST → JSON)
 │
-├── 📂 config/
-│   └── ⚙️ openelis_config.php            # Configuración del módulo
+├── 📂 sql/
+│   └── 📄 lang_custom.sql                # Traducciones custom
 │
-├── 📂 api/
-│   └── 🔗 webhook_results.php            # Endpoint de webhook de resultados (próximamente)
+├── 📂 patches/
+│   └── 📄 common.php.patch.txt           # Parche opcional para botón "Enviar" en el form
 │
 ├── 📄 README.md                          # Documentación (inglés)
 └── 📄 README_es.md                       # Este archivo (español)
 ```
+
+> ⭐ **IMPORTANTE:** Los archivos bajo `public/` son los únicos que el servidor
+> web debe alcanzar directamente. El árbol `interface/` de OpenEMR está
+> protegido y **no sirve scripts de módulos arbitrarios** por URL, así que en
+> producción el contenido de `public/` se **copia** a la carpeta
+> `public/modules/openelis/` de la raíz de OpenEMR. Ver
+> [Despliegue](#-despliegue).
+
+---
+
+## 🚀 Despliegue
+
+El árbol `interface/` de OpenEMR está protegido por el servidor web y **no sirve
+scripts de módulos arbitrarios accesibles por URL**. Para que las páginas web y
+los endpoints AJAX del módulo sean alcanzables, el contenido de `public/` debe
+**copiarse** a la carpeta `public/modules/openelis/` de la raíz de OpenEMR.
+
+> 💡 **¿Por qué no apuntar a la carpeta del módulo?** nginx (y la capa de
+> seguridad de OpenEMR) devolverá 404 o redirigirá cualquier script del módulo
+> pedido vía `interface/modules/custom_modules/...`. Los scripts "bootstrap"
+> subiendo hasta encontrar `globals.php`, así que funcionan correctamente desde
+> la carpeta `public/modules/openelis/` de la raíz.
+
+### Pasos
+
+1. Instalar el módulo (ver [Instalación](#-instalación)).
+2. **Copiar los scripts web** a la carpeta `public/modules/openelis/` de la
+   raíz de OpenEMR:
+
+   ```bash
+   mkdir -p /var/www/html/origen.ar/hcd/public/modules/openelis
+   cp interface/modules/custom_modules/openelis/public/*.php \
+      /var/www/html/origen.ar/hcd/public/modules/openelis/
+   ```
+
+3. **Verificar** que los endpoints respondan (sin 404). Probar el endpoint AJAX
+   desde la consola del servidor:
+
+   ```bash
+   curl -s -X POST "https://hcd.origen.ar/public/modules/openelis/send_order_action.php" \
+        -d "order_id=27" -d "action=send"
+   ```
+
+4. Tras actualizar los `public/*.php` del módulo, volver a copiarlos a la raíz
+   `public/modules/openelis/` para que la versión desplegada quede sincronizada.
+
+### Mapa de URLs (producción)
+
+| Script | URL en producción |
+|--------|-------------------|
+| `send_order_action.php` | `https://hcd.origen.ar/public/modules/openelis/send_order_action.php` |
+| `pending_orders.php`    | `https://hcd.origen.ar/public/modules/openelis/pending_orders.php` |
+| `admin_mapping.php`     | `https://hcd.origen.ar/public/modules/openelis/admin_mapping.php` |
+
+> ⚠️ **Detección de raíz:** Los scripts ubican el `globals.php` de OpenEMR
+> automáticamente subiendo desde su propia carpeta. Comprueban tanto
+> `<dir>/globals.php` como `<dir>/interface/globals.php` en cada nivel, así
+> funcionan ya sea que `globals.php` esté en la raíz de OpenEMR o (como en esta
+> instalación) bajo la carpeta `interface/` de la raíz. Esto también funciona
+> desde la carpeta del módulo (dev) o desde `public/modules/<nombre>/` (prod),
+> por lo que no hace falta cambiar código entre entornos.
 
 ---
 
@@ -217,7 +281,9 @@ Este módulo sigue los estándares de módulos custom de OpenEMR:
 - ✅ `table.sql` con directivas `#IfNotTable` para migraciones idempotentes
 - ✅ `openemr.bootstrap.php` para registro de namespace
 - ✅ `ModuleManagerListener` extiende `AbstractModuleActionListener`
-- ✅ Include de `globals.php`: `dirname(__FILE__, 6)`
+- ✅ Include de `globals.php`: auto-detectado por los scripts web (suben desde su
+  propia carpeta hasta encontrar `globals.php`, así funcionan desde la carpeta
+  del módulo o desde la raíz `public/`) — ver [Despliegue](#-despliegue)
 - ✅ Todo el texto translatable vía funciones `xlt()` / `xl()`
 - ✅ Sin PDO/mysqli directo — usa capa `sqlQuery()` / `sqlStatement()`
 
