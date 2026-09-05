@@ -20,8 +20,8 @@
 --   * Only rows with is_active = 1 AND a non-empty loinc_code are considered
 --     "fully mapable" by the UI (see pending_orders.php mapping-completeness badge).
 --     The send flow itself only requires a non-empty openelis_test_id.
---   * Maintenance: managed via the admin UI at admin_mapping.php (the "OpenELIS
---     Code Mapping" page under the Lab menu, ACL admin/super) for fine-grained
+--   * Maintenance: managed via the admin UI at admin_mapping.php (the "Code
+--     Mapping" page under Lab → OpenELIS, ACL admin/super) for fine-grained
 --     manual mapping, and via catalog_import.php for bulk catalog imports.
 --
 -- MULTI-LAB (provider_id)

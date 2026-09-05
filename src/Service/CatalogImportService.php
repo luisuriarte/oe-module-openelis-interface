@@ -96,7 +96,7 @@ class CatalogImportService
         if ($client === null) {
             throw new \RuntimeException(
                 "No catalog client available for provider {$provider['ppid']}. "
-                . "Set the catalog ADMIN credentials (mod_openelis_catalog_login / password) first."
+                . "Set the catalog ADMIN credentials on the Procedure Providers edit form and try again."
             );
         }
 
@@ -676,7 +676,7 @@ class CatalogImportService
         if (empty($provider['mod_openelis_catalog_login'])) {
             throw new \RuntimeException(
                 "No catalog credentials configured for {$provider['name']}. "
-                . "Set the OpenELIS ADMIN catalog user in catalog_import.php before importing."
+                . "Set the OpenELIS ADMIN catalog user on the Procedure Providers edit form before importing."
             );
         }
     }

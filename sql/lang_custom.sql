@@ -7,11 +7,14 @@ START TRANSACTION;
 
 INSERT IGNORE INTO `lang_custom` (`lang_description`, `lang_code`, `constant_name`, `definition`) VALUES
 
--- src/Bootstrap.php (menu label)
-('Spanish (Latin American)', 'el', 'OpenELIS Code Mapping',                                  'Mapeo de Códigos OpenELIS'),
+-- src/Bootstrap.php (OpenELIS parent menu + children labels)
+('Spanish (Latin American)', 'el', 'OpenELIS',                                                       'OpenELIS'),
+('Spanish (Latin American)', 'el', 'Code Mapping',                                                    'Mapeo de Códigos'),
+('Spanish (Latin American)', 'el', 'Settings',                                                        'Configuración'),
 
 -- public/admin_mapping.php (page title / header)
 ('Spanish (Latin American)', 'el', 'Access denied',                                          'Acceso denegado'),
+('Spanish (Latin American)', 'el', 'OpenELIS Code Mapping',                                  'Mapeo de Códigos OpenELIS'),
 ('Spanish (Latin American)', 'el', 'OpenEMR to OpenELIS Code Mapping',                       'Mapeo de Códigos OpenEMR a OpenELIS'),
 ('Spanish (Latin American)', 'el', 'Map OpenEMR lab procedures to OpenELIS tests.',           'Asocie los procedimientos de laboratorio de OpenEMR con las pruebas de OpenELIS.'),
 
@@ -188,13 +191,14 @@ INSERT IGNORE INTO `lang_custom` (`lang_description`, `lang_code`, `constant_nam
 ('Spanish (Latin American)', 'el', 'Select a lab provider...',                                  'Seleccione un proveedor de laboratorio...'),
 ('Spanish (Latin American)', 'el', 'Preview',                                                   'Vista previa'),
 ('Spanish (Latin American)', 'el', 'Confirm import',                                            'Confirmar importación'),
-('Spanish (Latin American)', 'el', 'Catalog credentials',                                       'Credenciales de catálogo'),
-('Spanish (Latin American)', 'el', 'OpenELIS ADMIN user for the REST test-catalog API — different from the operational Analyser Import user used to send orders. The importer uses these credentials exclusively.', 'Usuario con rol ADMIN de OpenELIS para la API REST test-catalog: es distinto del usuario operativo Analyser Import que se usa para enviar órdenes. El importador usa estas credenciales exclusivamente.'),
-('Spanish (Latin American)', 'el', 'Catalog login',                                            'Usuario de catálogo'),
-('Spanish (Latin American)', 'el', 'Catalog password',                                          'Contraseña de catálogo'),
-('Spanish (Latin American)', 'el', 'e.g. admin',                                                'ej.: admin'),
-('Spanish (Latin American)', 'el', 'Save credentials',                                          'Guardar credenciales'),
-('Spanish (Latin American)', 'el', 'Catalog credentials saved.',                                'Credenciales de catálogo guardadas.'),
+-- patched core form interface/orders/procedure_provider_edit.php
+-- (OpenELIS catalog credentials section, see patches/procedure_provider_edit.php)
+('Spanish (Latin American)', 'el', 'OpenELIS Catalog Login',                                      'Usuario de catálogo OpenELIS'),
+('Spanish (Latin American)', 'el', 'OpenELIS ADMIN user',                                         'Usuario ADMIN de OpenELIS'),
+('Spanish (Latin American)', 'el', 'Leave blank to keep the stored password',                     'Dejar en blanco para conservar la contraseña almacenada'),
+('Spanish (Latin American)', 'el', 'OpenELIS ADMIN user for the REST test-catalog API - different from the operational user used to send orders (Login/Password above).', 'Usuario con rol ADMIN de OpenELIS para la API REST test-catalog: es distinto del usuario operativo usado para enviar órdenes (Login/Password de más arriba).'),
+('Spanish (Latin American)', 'el', 'This second credential set is used by the module\'s bulk catalog import (catalog_import.php). Assign the ADMIN role to this OpenELIS user in the OpenELIS admin UI.', 'Este segundo par de credenciales lo usa la importación masiva de catálogo del módulo (catalog_import.php). Asigne el rol ADMIN a este usuario de OpenELIS en la interfaz de administración de OpenELIS.'),
+('Spanish (Latin American)', 'el', 'The password is never sent back to the browser: leave the field blank to keep the stored value.', 'La contraseña nunca vuelve al navegador: deje el campo en blanco para conservar el valor almacenado.'),
 ('Spanish (Latin American)', 'el', 'Go to Settings',                                            'Ir a Configuración'),
 ('Spanish (Latin American)', 'el', 'Select a valid lab provider.',                              'Seleccione un proveedor de laboratorio válido.');
 

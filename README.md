@@ -93,7 +93,11 @@ openelis/
 │   └── 📄 lang_custom.sql                # Custom translations
 │
 ├── 📂 patches/
-│   └── 📄 common.php.patch.txt           # Optional patch for order form Send button
+│   └── 📄 common.php.patch.txt           # Patch (8.0.0): "Send to OpenELIS" button
+│   └── 📄 procedure_provider_edit.php.patch.txt  # Patch (8.0.0): catalog credentials in providers form
+│   └── 📂 openemr/                       # COMPLETE patched files (production-ready)
+│       └── 📂 interface/forms/procedure_order/common.php
+│       └── 📂 interface/orders/procedure_provider_edit.php
 │
 ├── 📄 README.md                          # This file (English)
 └── 📄 README_es.md                       # Documentation (Spanish)
@@ -188,7 +192,7 @@ OpenEMR root `public/modules/openelis/` folder.
 
 3. **Enable the module:**
    - In the Module Manager, click **Enable** on the OpenELIS Interface module
-   - The menu item "Mapeo códigos OpenELIS" will appear under the Lab section
+   - The "OpenELIS" submenu (Import Catalog, Pending Orders, Code Mapping, Settings) will appear under the Lab section
 
 4. **Verify installation:**
 
@@ -240,7 +244,8 @@ The recommended way to build the procedure catalog for a provider. Reads the
 OpenELIS REST API `GET /OpenELIS-Global/rest/test-catalog/*` (requires an
 **OpenELIS ADMIN** user, configured per provider as
 `procedure_providers.mod_openelis_catalog_login` / `mod_openelis_catalog_password`
-— never the operational Analyser Import user) and:
+— never the operational Analyser Import user; edited on the native Procedure
+Providers form, see `patches/procedure_provider_edit.php`) and:
 
 1. Lists active panels and, per panel, its ordered tests.
 2. Cross-checks every test against the active-tests list
@@ -270,7 +275,7 @@ transaction. `admin_mapping.php` remains the manual fine-tuning path and coexist
 
 ### 🔧 Admin Interface
 
-Access via **Lab → Mapeo códigos OpenELIS** (requires `admin/super` ACL).
+Access via **Lab → OpenELIS → Code Mapping** (requires `admin/super` ACL).
 
 Features:
 - 📋 List all active OpenEMR procedures (`procedure_type = 'ord'`)

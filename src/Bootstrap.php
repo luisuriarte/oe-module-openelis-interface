@@ -33,7 +33,7 @@ class Bootstrap
         $webroot = $GLOBALS['webroot'] ?? '';
         $scriptsUrl = $webroot . '/public/modules/openelis/';
 
-        $menuItems = [
+        $subItems = [
             [
                 'menu_id' => 'mod3',
                 'label' => xlt("Import Catalog"),
@@ -46,19 +46,29 @@ class Bootstrap
             ],
             [
                 'menu_id' => 'mod0',
-                'label' => xlt("OpenELIS Code Mapping"),
+                'label' => xlt("Code Mapping"),
                 'url' => $scriptsUrl . 'admin_mapping.php',
             ],
             [
                 'menu_id' => 'mod2',
-                'label' => xlt("OpenELIS Settings"),
+                'label' => xlt("Settings"),
                 'url' => $scriptsUrl . 'openelis_config.php',
             ],
         ];
 
         foreach ($menu as $item) {
             if ($item->menu_id == 'proimg') {
-                foreach ($menuItems as $mi) {
+                // Parent item "OpenELIS": no url/target → rendered as a hover
+                // submenu (same pattern as core parents like Patient / Procedures).
+                $parent = new \stdClass();
+                $parent->requirement = 0;
+                $parent->menu_id = 'openelis';
+                $parent->acl_req = ["admin", "super"];
+                $parent->label = xlt("OpenELIS");
+                $parent->global_req = [];
+                $parent->children = [];
+
+                foreach ($subItems as $mi) {
                     $menuItem = new \stdClass();
                     $menuItem->requirement = 0;
                     $menuItem->target = 'mod';
@@ -68,8 +78,10 @@ class Bootstrap
                     $menuItem->global_req = [];
                     $menuItem->url = $mi['url'];
                     $menuItem->children = [];
-                    $item->children[] = $menuItem;
+                    $parent->children[] = $menuItem;
                 }
+
+                $item->children[] = $parent;
                 break;
             }
         }

@@ -1,0 +1,168 @@
+# Patch: Add OpenELIS catalog credentials to the Procedure Provider edit form
+#
+# File: interface/orders/procedure_provider_edit.php
+# OpenEMR version: 8.0.0 (tag v8_0_0) — ORIGINAL file
+#
+# This patch adds two fields ("OpenELIS Catalog Login" / "OpenELIS Catalog
+# Password") to the Procedure Provider edit/add form. They persist into the
+# module columns procedure_providers.mod_openelis_catalog_login and
+# mod_openelis_catalog_password — the ADMIN user for the OpenELIS REST
+# test-catalog API used by the module's bulk catalog import (catalog_import.php).
+# It is a SECOND credential set: the stock Login/Password fields on this same
+# form keep the operational user (Analyser Import) used by the order-send flow.
+#
+# NOTES:
+#  - OpenEMR 8.0.0 builds $sets by embedding pre-escaped values inline
+#    (invalue() / onvalue() / add_escape_custom()). This patch follows the
+#    SAME style: the two catalog values are pre-computed in PHP variables just
+#    before $sets, so no bound parameters are needed.
+#  - The catalog password is rendered as type="password" and, when left blank
+#    on an existing provider, the stored value is KEPT (it is never erased by an
+#    unrelated edit). On brand-new providers a blank password stays blank.
+#  - No new columns/DDL are required: mod_openelis_catalog_login/password are
+#    created by the module's table.sql.
+#  - Adapts cleanly to custom versions that add PACS/viewer fields
+#    (remote_api, wado_url): keep YOUR columns, only exchange the LAST $sets
+#    line for the catalog tail of STEP 2.
+#
+# INSTRUCTIONS:
+# 1. Backup interface/orders/procedure_provider_edit.php
+# 2. Apply the three changes below in order.
+# 3. Test by editing an existing provider and by adding a new one.
+#
+# Optionally (Spanish site): the new labels are translated by the module's
+# sql/lang_custom.sql ("OpenELIS Catalog Login", "OpenELIS ADMIN user",
+# "Leave blank to keep the stored password", plus the three help strings).
+# Re-run that file to pick them up.
+
+## ============================================================
+## STEP 1: Pre-compute the two catalog values just before $sets
+## ============================================================
+## FIND (the end of the org fallback, right before the $sets assignment):
+#
+#         if (empty($org_res) && $ppid) {
+#             $org_qry = "SELECT name FROM procedure_providers WHERE ppid = ?";
+#             $org_res = sqlQuery($org_qry, [$ppid]);
+#             $org_name = $org_res['name'];
+#         }
+#         $sets =
+#
+## REPLACE WITH:
+#
+#         if (empty($org_res) && $ppid) {
+#             $org_qry = "SELECT name FROM procedure_providers WHERE ppid = ?";
+#             $org_res = sqlQuery($org_qry, [$ppid]);
+#             $org_name = $org_res['name'];
+#         }
+#
+#         // OpenELIS catalog credentials (module columns). The catalog password
+#         // keeps its stored value when left blank so unrelated edits never
+#         // erase it.
+#         $catalogLogin = trim((string)($_POST['form_catalog_login'] ?? ''));
+#         $catalogPassword = (string)($_POST['form_catalog_password'] ?? '');
+#         if ($catalogPassword === '' && $ppid) {
+#             $savedCatalog = sqlQuery(
+#                 "SELECT mod_openelis_catalog_password FROM procedure_providers WHERE ppid = ?",
+#                 [$ppid]
+#             );
+#             $catalogPassword = (string)($savedCatalog['mod_openelis_catalog_password'] ?? '');
+#         }
+#         $sets =
+
+## ============================================================
+## STEP 2: Append the two catalog columns to the END of $sets
+## ============================================================
+## FIND (the last two $sets lines — identical in the original file):
+#
+#             "notes = " . invalue('form_notes') . ", " .
+#             "active = " . onvalue('form_active');
+#
+## REPLACE WITH:
+#
+#             "notes = " . invalue('form_notes') . ", " .
+#             "active = " . onvalue('form_active') . ", " .
+#             "mod_openelis_catalog_login = '" . add_escape_custom($catalogLogin) . "', " .
+#             "mod_openelis_catalog_password = '" . add_escape_custom($catalogPassword) . "'";
+
+## ============================================================
+## STEP 3: UI — add a new section AFTER the stock Login block
+## ============================================================
+## FIND (the end of the existing "Login" section, the closing lines
+## of the div whose id is "login_info"):
+#
+#                         <div id="login_info" class="collapse">
+#                             <a href="#login_info" data-toggle="collapse" class="oe-pull-away"><i class="fa fa-times oe-help-x" aria-hidden="true"></i></a>
+#                             <p><?php echo xlt("Login - details are only required if you are connecting to a facility using the SFTP protocol "); ?></p>
+#                             <p><?php echo xlt("Type in the username and password provided by the facility"); ?></p>
+#                         </div>
+#                     </div>
+#                 </div>
+#
+## REPLACE WITH (same block + new section):
+#
+#                         <div id="login_info" class="collapse">
+#                             <a href="#login_info" data-toggle="collapse" class="oe-pull-away"><i class="fa fa-times oe-help-x" aria-hidden="true"></i></a>
+#                             <p><?php echo xlt("Login - details are only required if you are connecting to a facility using the SFTP protocol "); ?></p>
+#                             <p><?php echo xlt("Type in the username and password provided by the facility"); ?></p>
+#                         </div>
+#                     </div>
+#                 </div>
+#                 <div class="row mt-3">
+#                     <div class="col-12">
+#                         <div class="clearfix">
+#                             <div class="col-sm-12 label-div">
+#                                 <label for="form_catalog_login"><?php echo xlt('OpenELIS Catalog Login'); ?>:</label> <a href="#catalog_login_info" class="info-anchor icon-tooltip" data-toggle="collapse"><i class="fa fa-question-circle" aria-hidden="true"></i></a>
+#                             </div>
+#                             <div class="row col-12">
+#                                 <div class="col-sm-6">
+#                                     <input type='text' name='form_catalog_login' id='form_catalog_login' maxlength='100' value='<?php echo attr($row['mod_openelis_catalog_login'] ?? ''); ?>' placeholder='<?php echo xla('OpenELIS ADMIN user'); ?>' class='form-control' />
+#                                 </div>
+#                                 <div class="col-sm-6">
+#                                     <input type='password' name='form_catalog_password' id='form_catalog_password' maxlength='255' value='' placeholder='<?php echo xla('Leave blank to keep the stored password'); ?>' autocomplete='new-password' class='form-control' />
+#                                 </div>
+#                             </div>
+#                         </div>
+#                         <div id="catalog_login_info" class="collapse">
+#                             <a href="#catalog_login_info" data-toggle="collapse" class="oe-pull-away"><i class="fa fa-times oe-help-x" aria-hidden="true"></i></a>
+#                             <p><?php echo xlt("OpenELIS ADMIN user for the REST test-catalog API - different from the operational user used to send orders (Login/Password above)."); ?></p>
+#                             <p><?php echo xlt("This second credential set is used by the module's bulk catalog import (catalog_import.php). Assign the ADMIN role to this OpenELIS user in the OpenELIS admin UI."); ?></p>
+#                             <p><?php echo xlt("The password is never sent back to the browser: leave the field blank to keep the stored value."); ?></p>
+#                         </div>
+#                     </div>
+#                 </div>
+
+## ============================================================
+## STEP 4: Lint & sanity check (always do this)
+## ============================================================
+#
+# 1. php -l interface/orders/procedure_provider_edit.php
+#
+# 2. Count check: the UPDATE/INSERT statement now sets exactly
+#    (19 standard columns) + (2 catalog columns) = 21 columns. Every "$sets"
+#    line must carry a value: "name = '...', lab_director = ...,
+#    ..., mod_openelis_catalog_login = '...', mod_openelis_catalog_password =
+#    '...'". If a column is missing its value the statement is malformed and
+#    the save fails.
+#
+# 3. Test BOTH paths from the UI: edit an existing provider, and add a new one.
+#    On the edit path, clear the catalog password field, save, and confirm the
+#    stored password is preserved.
+
+## ============================================================
+## TROUBLESHOOTING the "empty error" save failure
+## ============================================================
+## If saving fails with an EMPTY text after "Error:" (e.g.
+## "Failed to execute statement. Error:  Statement: UPDATE ..."), the
+## statement sent to MySQL is malformed. Verify against the DEPLOYED file:
+##
+##   - Every column in $sets has a value with the right helper:
+##     invalive('form_xxx') for text fields, onvalue('form_xxx') for the
+##     active checkbox, add_escape_custom($var) for the two catalog columns.
+##   - Quoting is balanced: each column is quoted as "col = value", with a
+##     trailing "," on all lines except the last.
+##   - Custom files with extra columns (remote_api, wado_url) keep ALL of
+##     them: only the last line ("active = ...") changes.
+##
+## NOTE: the "empty error" is the ADOdb/mysqli signature for a broken
+## statement (typically a placeholder/value mismatch in versions that use
+## bound parameters).

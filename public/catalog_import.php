@@ -5,8 +5,9 @@
  * into OpenEMR's procedure catalog, per lab provider.
  *
  * Reads the OpenELIS REST test-catalog API using the provider's catalog ADMIN
- * credentials (mod_openelis_catalog_login / password). Supports a dry-run
- * preview first and a separate confirm action, both via AJAX.
+ * credentials (mod_openelis_catalog_login / password), configured in the native
+ * Procedure Providers edit form. Supports a dry-run preview first and a
+ * separate confirm action, both via AJAX.
  *
  * @package OpenEMR
  * @link    http://www.open-emr.org
@@ -124,66 +125,21 @@ if ($isAjax) {
     exit;
 }
 
-// ── Save catalog credentials (regular POST form, page reload) ───────────
-$message = '';
-$messageClass = '';
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'save_credentials') {
-    if (!oe_module_csrf_verify($_POST['csrf_token_form'] ?? '', 'OpenElisModule')) {
-        CsrfUtils::csrfNotVerified();
-    }
-
-    $providerId = (int)($_POST['provider_id'] ?? 0);
-    if ($providerId <= 0 || !CatalogImportService::providerExists($providerId)) {
-        $message = xl('Select a valid lab provider.');
-        $messageClass = 'text-danger';
-    } else {
-        $current = sqlQuery(
-            "SELECT mod_openelis_catalog_login, mod_openelis_catalog_password
-             FROM procedure_providers WHERE ppid = ?",
-            [$providerId]
-        );
-
-        $login = trim((string)($_POST['catalog_login'] ?? ''));
-        $password = (string)($_POST['catalog_password'] ?? '');
-        if ($password === '' && !empty($current['mod_openelis_catalog_password'])) {
-            // Keep the stored password when the field is left blank.
-            $password = $current['mod_openelis_catalog_password'];
-        }
-
-        sqlStatement(
-            "UPDATE procedure_providers
-             SET mod_openelis_catalog_login = ?, mod_openelis_catalog_password = ?
-             WHERE ppid = ?",
-            [$login, $password, $providerId]
-        );
-        $message = xl('Catalog credentials saved.');
-        $messageClass = 'text-success';
-    }
-}
-
 // ── Page data ───────────────────────────────────────────────────────────
+// Catalog credentials (mod_openelis_catalog_login/password) are managed on the
+// native Procedure Providers edit form (see patches/procedure_provider_edit.php).
 $providers = [];
 $rsProviders = sqlStatement(
-    "SELECT ppid, name, protocol, mod_openelis_catalog_login, mod_openelis_catalog_password
+    "SELECT ppid, name, protocol
      FROM procedure_providers WHERE active = 1 ORDER BY name"
 );
 while ($row = sqlFetchArray($rsProviders)) {
-    // Never send the password to the browser.
-    unset($row['mod_openelis_catalog_password']);
     $providers[] = $row;
 }
 
 $selectedProvider = (int)($_POST['provider_id'] ?? ($_GET['provider_id'] ?? 0));
-$selectedProviderRow = null;
-foreach ($providers as $p) {
-    if ((int)$p['ppid'] === $selectedProvider) {
-        $selectedProviderRow = $p;
-        break;
-    }
-}
-if ($selectedProviderRow === null) {
-    $selectedProviderRow = $providers[0] ?? null;
-    $selectedProvider = $selectedProviderRow['ppid'] ?? 0;
+if (!in_array($selectedProvider, array_map('intval', array_column($providers, 'ppid')), true)) {
+    $selectedProvider = isset($providers[0]['ppid']) ? (int)$providers[0]['ppid'] : 0;
 }
 
 $csrfToken = oe_module_csrf_collect('OpenElisModule');
@@ -213,12 +169,6 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
         </div>
     </div>
     <div class="card-body">
-        <?php if ($message !== ''): ?>
-            <div class="alert <?php echo attr($messageClass) === 'text-danger' ? 'alert-danger' : 'alert-success'; ?>">
-                <?php echo text($message); ?>
-            </div>
-        <?php endif; ?>
-
         <!-- Provider select -->
         <div class="row g-2 align-items-end mb-3">
             <div class="col-md-6">
@@ -226,13 +176,11 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
                 <select id="provider_id" class="form-select">
                     <option value=""><?php echo xlt("Select a lab provider..."); ?></option>
                     <?php foreach ($providers as $p): ?>
-                        <option data-catalog-user="<?php echo attr($p['mod_openelis_catalog_login'] ?? ''); ?>"
-                                value="<?php echo attr($p['ppid']); ?>"<?php echo (int)$p['ppid'] === $selectedProvider ? ' selected' : ''; ?>>
+                        <option value="<?php echo attr($p['ppid']); ?>"<?php echo (int)$p['ppid'] === $selectedProvider ? ' selected' : ''; ?>>
                             <?php echo text($p['name'] . ($p['protocol'] ? ' (' . $p['protocol'] . ')' : '')); ?>
                         </option>
                     <?php endforeach; ?>
                 </select>
-                <div class="cfg-hint mt-1" id="catalog_user_hint"></div>
             </div>
             <div class="col-md-6">
                 <div class="d-flex gap-2">
@@ -255,38 +203,6 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
         <!-- Result -->
         <div id="result"></div>
 
-        <!-- Catalog credentials -->
-        <div class="card mb-4 mt-4">
-            <div class="card-body">
-                <h5><?php echo xlt("Catalog credentials"); ?></h5>
-                <p class="cfg-hint">
-                    <?php echo xlt("OpenELIS ADMIN user for the REST test-catalog API — different from the operational Analyser Import user used to send orders. The importer uses these credentials exclusively."); ?>
-                </p>
-                <form method="post" action="catalog_import.php" class="row g-2 align-items-end">
-                    <input type="hidden" name="csrf_token_form" value="<?php echo attr($csrfToken); ?>">
-                    <input type="hidden" name="action" value="save_credentials">
-                    <input type="hidden" name="provider_id" id="cred_provider_id" value="<?php echo attr($selectedProvider); ?>">
-                    <div class="col-md-4">
-                        <label class="form-label"><?php echo xlt("Catalog login"); ?></label>
-                        <input type="text" class="form-control" name="catalog_login"
-                               value="<?php echo attr($selectedProviderRow['mod_openelis_catalog_login'] ?? ''); ?>"
-                               autocomplete="off" placeholder="<?php echo xlt("e.g. admin"); ?>">
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label"><?php echo xlt("Catalog password"); ?></label>
-                        <input type="password" class="form-control" name="catalog_password"
-                               autocomplete="new-password" placeholder="">
-                        <div class="cfg-hint" id="catalog_pass_hint">
-                            <?php echo xlt("A password is stored. Leave blank to keep it."); ?>
-                        </div>
-                    </div>
-                    <div class="col-md-4">
-                        <button type="submit" class="btn btn-outline-primary"><?php echo xlt("Save credentials"); ?></button>
-                    </div>
-                </form>
-            </div>
-        </div>
-
         <div class="d-flex gap-2">
             <a href="<?php echo attr($scriptsUrl . 'admin_mapping.php'); ?>" class="btn btn-secondary">
                 <?php echo xlt("Go to Code Mapping"); ?>
@@ -302,27 +218,9 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
 <script>
     const CSRF_TOKEN = document.getElementById('csrf_token').value;
     const providerSelect = document.getElementById('provider_id');
-    const credProvider = document.getElementById('cred_provider_id');
-    const catalogUserHint = document.getElementById('catalog_user_hint');
-    const catalogPassHint = document.getElementById('catalog_pass_hint');
     const btnPreview = document.getElementById('btn_preview');
     const btnImport = document.getElementById('btn_import');
     const resultBox = document.getElementById('result');
-
-    function updateHint() {
-        const opt = providerSelect.selectedOptions[0];
-        const pid = providerSelect.value;
-        credProvider.value = pid;
-        if (opt && pid) {
-            const user = opt.getAttribute('data-catalog-user') || '';
-            catalogUserHint.textContent = user
-                ? 'Usuario de catálogo: ' + user
-                : 'Sin usuario de catálogo configurado. Configurá las credenciales abajo.';
-            catalogPassHint.style.display = '';
-        } else {
-            catalogUserHint.textContent = '';
-        }
-    }
 
     function buildList(textos, vacio) {
         const ul = document.createElement('ul');
@@ -483,8 +381,6 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
 
     btnPreview.addEventListener('click', () => run('preview'));
     btnImport.addEventListener('click', () => run('import'));
-    providerSelect.addEventListener('change', updateHint);
-    updateHint();
 </script>
 </body>
 </html>

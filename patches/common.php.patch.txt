@@ -1,7 +1,7 @@
 # Patch: Add "Send to OpenELIS" button to procedure_order form
-# 
+#
 # File: interface/forms/procedure_order/common.php
-# OpenEMR version: 8.2.0
+# OpenEMR version: 8.0.0 (tag v8_0_0) — ORIGINAL file
 #
 # This patch adds a "Send to OpenELIS" button in the order view page,
 # alongside the existing Save/Transmit/Cancel buttons.
@@ -10,9 +10,10 @@
 # 1. Backup your common.php file
 # 2. Open interface/forms/procedure_order/common.php
 # 3. Confirm these are ALREADY present (they are required by this patch):
-#    - use OpenEMR\Common\Csrf\CsrfUtils;         (line ~24, already present)
-#    - $session = SessionWrapperFactory::getInstance()->getActiveSession();  (line ~71, already present)
-#    - $row, $formid, $viewmode, $GLOBALS['webroot']   (already in scope)
+#    - use OpenEMR\Common\Csrf\CsrfUtils;                       (line ~29, present)
+#    - $row, $formid, $viewmode, $GLOBALS['webroot']            (already in scope)
+#    NOTE: OpenEMR 8.0.0 does NOT define a $session variable here; the CSRF
+#    token is collected with the plain CsrfUtils::collectCsrfToken() call.
 # 4. Search for the marker line (see below)
 # 5. Insert the code block after it
 # 6. Insert the JS function before the closing </script> tag
@@ -32,7 +33,7 @@
 # The URLs below point to {webroot}/public/modules/openelis/ accordingly.
 
 ## ============================================================
-## STEP 1: Find this block (around line 1900-1904):
+## STEP 1: Find this block (around line 1919-1923):
 ## ============================================================
 #
 #                                     <button type="submit" class="btn btn-primary btn-transmit"
@@ -67,7 +68,7 @@
 #
 ## ============================================================
 ## STEP 3: Add this JavaScript function before the </script> tag
-## (around line 1080-1090, after the validate() function):
+## (after the validate() function, around line 1150-1213):
 ## ============================================================
 #
 #         function sendOrderToOpenELIS(btn, orderId) {
@@ -79,7 +80,7 @@
 #
 #             var formData = new FormData();
 #             formData.append('order_id', orderId);
-#             formData.append('csrf_token_form', <?php echo js_escape(CsrfUtils::collectCsrfToken(session: $session)); ?>);
+#             formData.append('csrf_token_form', <?php echo js_escape(CsrfUtils::collectCsrfToken()); ?>);
 #             formData.append('action', 'send');
 #
 #             fetch(<?php echo js_escape($GLOBALS['webroot'] . '/public/modules/openelis/send_order_action.php'); ?>, {
@@ -110,3 +111,12 @@
 #                 btn.innerHTML = origText;
 #             });
 #         }
+#
+## ============================================================
+## NOTE FOR NEWER/CUSTOM FILES
+## ============================================================
+## In OpenEMR 8.2.0+ and in custom files the CSRF token is usually collected as
+## CsrfUtils::collectCsrfToken(session: $session) with a SessionWrapperFactory
+## variable. If your file defines $session, replace the two
+## CsrfUtils::collectCsrfToken() calls in STEP 3 with
+## CsrfUtils::collectCsrfToken(session: $session) for consistency.

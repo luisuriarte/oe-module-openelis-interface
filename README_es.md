@@ -93,7 +93,11 @@ openelis/
 │   └── 📄 lang_custom.sql                # Traducciones custom
 │
 ├── 📂 patches/
-│   └── 📄 common.php.patch.txt           # Parche opcional para botón "Enviar" en el form
+│   └── 📄 common.php.patch.txt           # Parche (8.0.0): botón "Enviar a OpenELIS"
+│   └── 📄 procedure_provider_edit.php.patch.txt  # Parche (8.0.0): credenciales de catálogo en form de proveedores
+│   └── 📂 openemr/                       # Archivos COMPLETOS parcheados (listos para producción)
+│       └── 📂 interface/forms/procedure_order/common.php
+│       └── 📂 interface/orders/procedure_provider_edit.php
 │
 ├── 📄 README.md                          # Documentación (inglés)
 └── 📄 README_es.md                       # Este archivo (español)
@@ -188,7 +192,7 @@ los endpoints AJAX del módulo sean alcanzables, el contenido de `public/` debe
 
 3. **Habilitar el módulo:**
    - En el Module Manager, hacer clic en **Habilitar** en el módulo OpenELIS Interface
-   - El elemento de menú "Mapeo códigos OpenELIS" aparecerá en la sección de Laboratorio
+   - El submenú "OpenELIS" (con Importar Catálogo, Órdenes Pendientes, Mapeo de Códigos y Configuración) aparecerá bajo la sección de Laboratorio
 
 4. **Verificar la instalación:**
 
@@ -241,7 +245,8 @@ La vía recomendada para armar el catálogo de procedimientos de un proveedor.
 Lee la API REST de OpenELIS `GET /OpenELIS-Global/rest/test-catalog/*`
 (requiere un usuario **ADMIN** de OpenELIS, configurado por proveedor en
 `procedure_providers.mod_openelis_catalog_login` / `mod_openelis_catalog_password`
-— nunca el usuario operativo Analyser Import) y:
+— nunca el usuario operativo Analyser Import; se editan en el formulario nativo
+de proveedores, ver `patches/procedure_provider_edit.php`) y:
 
 1. Lista los paneles activos y, por panel, sus pruebas ordenables.
 2. Cruza cada prueba contra la lista de pruebas activas
@@ -274,7 +279,7 @@ de ajuste fino manual y convive (sus filas quedan con `provider_id = 0`,
 
 ### 🔧 Interfaz de administración
 
-Acceder vía **Laboratorio → Mapeo códigos OpenELIS** (requiere ACL `admin/super`).
+Acceder vía **Laboratorio → OpenELIS → Mapeo de Códigos** (requiere ACL `admin/super`).
 
 Características:
 - 📋 Lista todos los procedimientos activos de OpenEMR (`procedure_type = 'ord'`)
