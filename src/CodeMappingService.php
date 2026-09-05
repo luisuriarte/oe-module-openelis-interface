@@ -4,6 +4,15 @@ namespace OpenEMR\Modules\OpenElis;
 
 class CodeMappingService
 {
+    // TODO (future iteration): mod_openelis_code_mapping is now multi-lab —
+    // rows carry provider_id (procedure_providers.ppid). The send flow must
+    // eventually resolve mappings for the ORDER'S lab_id, i.e. add
+    //   AND provider_id IN (0, <order.lab_id>)
+    // to every query below (preferring the exact provider_id match). Deliberately
+    // NOT implemented yet: the order flow keeps working unscoped for now, per the
+    // current scope. When implemented, keep provider_id = 0 rows as the fallback
+    // (legacy / unassigned).
+
     /**
      * Returns the active openelis_test_id for a given procedure code, or null.
      */

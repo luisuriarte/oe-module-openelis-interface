@@ -35,6 +35,11 @@ class Bootstrap
 
         $menuItems = [
             [
+                'menu_id' => 'mod3',
+                'label' => xlt("Import Catalog"),
+                'url' => $scriptsUrl . 'catalog_import.php',
+            ],
+            [
                 'menu_id' => 'mod1',
                 'label' => xlt("Pending Orders"),
                 'url' => $scriptsUrl . 'pending_orders.php',

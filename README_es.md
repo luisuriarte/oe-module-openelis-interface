@@ -73,17 +73,21 @@ openelis/
 │   ├── 🔧 Bootstrap.php                  # Registro de menú + listeners de eventos
 │   ├── 🔧 CodeMappingService.php         # Consultas reutilizables de mapeo de códigos
 │   ├── 🔧 OrderSyncService.php           # Servicios syncPatient/syncPractitioner/sendOrder
-│   ├── 📂 Client/                        # OpenElisApiClient (cliente cURL FHIR)
+│   ├── 📂 Client/                        # Clientes HTTP (FHIR + catálogo REST)
+│   │   ├── 🔌 OpenElisApiClient.php      # Cliente FHIR R4 (flujo de envío de órdenes)
+│   │   └── 🔌 CatalogApiClient.php       # Cliente REST test-catalog (usuario admin catálogo)
 │   ├── 📂 Mappers/                       # Mapeadores FHIR Patient/Practitioner/Order
 │   └── 📂 Service/                       # Servicios de negocio
-│       └── 🗄️ ProcedureCatalogImporter.php # CSV → procedure_type (grp + ord)
+│       ├── 🗄️ CatalogImportService.php   # Catálogo REST → procedure_type + mapeos (por proveedor)
+│       └── 🗄️ ProcedureCatalogImporter.php # CSV legado → procedure_type (grp + ord)
 │
 ├── 📂 public/                            # ⭐ Scripts web — se copian a <raiz_openemr>/public/modules/openelis/
 │   ├── 🖥️ admin_mapping.php              # Interfaz admin para CRUD de mapeo de códigos
 │   ├── 🖥️ pending_orders.php             # Órdenes pendientes + UI para enviar a OpenELIS
 │   ├── 🖥️ send_order_action.php          # Endpoint AJAX (POST → JSON)
-│   ├── 🗂️ catalog.csv                    # Export del catálogo de pruebas de OpenELIS (import directo)
-│   └── 🗂️ panels.csv                     # Export de paneles de OpenELIS (import directo)
+│   ├── 🖥️ catalog_import.php             # Importación masiva de catálogo (vista previa + confirmar)
+│   ├── 🗂️ catalog.csv                    # Export del catálogo de pruebas de OpenELIS (import directo, legado)
+│   └── 🗂️ panels.csv                     # Export de paneles de OpenELIS (import directo, legado)
 │
 ├── 📂 sql/
 │   └── 📄 lang_custom.sql                # Traducciones custom
@@ -201,14 +205,72 @@ La capa de mapeo traduce los códigos de procedimientos de OpenEMR (`procedure_t
 
 ### 📊 Tabla: `mod_openelis_code_mapping`
 
+La tabla es **multi-laboratorio**: el mismo código de procedimiento de OpenEMR
+puede pedirse contra laboratorios distintos, y cada uno lo resuelve a una prueba
+OpenELIS distinta. La clave única es por lo tanto
+`(openemr_procedure_code, provider_id)`; `provider_id` referencia
+`procedure_providers.ppid` (0 = filas legadas / sin laboratorio asociado).
+
 | Columna | Tipo | Descripción |
 |---------|------|-------------|
 | `id` | INT (PK) | Identificador autoincremental |
-| `openemr_procedure_code` | VARCHAR(50) UNIQUE | Código de procedimiento de OpenEMR |
+| `provider_id` | INT | `procedure_providers.ppid` al que pertenece el mapeo (0 = sin asignar) |
+| `openemr_procedure_code` | VARCHAR(50) | Código de procedimiento de OpenEMR (único por proveedor) |
 | `openemr_procedure_name` | VARCHAR(255) | Nombre para mostrar del procedimiento |
 | `openelis_test_id` | VARCHAR(50) | ID de prueba en OpenELIS |
 | `openelis_test_name` | VARCHAR(255) | Nombre de la prueba en OpenELIS |
+| `openelis_panel_id` | VARCHAR(20) | Panel de OpenELIS del que se importó la prueba (informativo) |
+| `openelis_panel_name` | VARCHAR(255) | Nombre del panel (informativo) |
 | `is_active` | TINYINT(1) | 1 = activo, 0 = inactivo |
+| `import_source` | ENUM(`'manual'`,`'catalog_import'`) | Las filas `manual` nunca se sobrescriben al importar |
+| `imported_at` | DATETIME | Última vez que el importador tocó esta fila |
+| `loinc_code` | VARCHAR(20) | Código LOINC (agrega coding FHIR; usado en el badge "totalmente mapeado") |
+| `snomed_specimen` / `snomed_finding` / `units` | VARCHAR | Columnas opcionales de estandarización FHIR |
+
+Comportamiento de colisión al importar:
+- Las filas `import_source = 'catalog_import'` (generadas por el importador) se
+  sobrescriben en su lugar al re-importar (idempotente).
+- Las filas `import_source = 'manual'` (creadas a mano en `admin_mapping.php`)
+  **nunca se sobrescriben**: un re-import solo refresca
+  `openelis_panel_id` / `openelis_panel_name` / `imported_at` y reporta el
+  mapeo como **conflicto** para revisión humana.
+
+### 🧩 Importación de catálogo (REST) — `catalog_import.php`
+
+La vía recomendada para armar el catálogo de procedimientos de un proveedor.
+Lee la API REST de OpenELIS `GET /OpenELIS-Global/rest/test-catalog/*`
+(requiere un usuario **ADMIN** de OpenELIS, configurado por proveedor en
+`procedure_providers.mod_openelis_catalog_login` / `mod_openelis_catalog_password`
+— nunca el usuario operativo Analyser Import) y:
+
+1. Lista los paneles activos y, por panel, sus pruebas ordenables.
+2. Cruza cada prueba contra la lista de pruebas activas
+   (`errorCount` / `findings`):
+   - `errorCount > 0` o cualquier finding de severidad ERROR → **excluida**
+     (p. ej. una prueba huérfana sin vínculo de tipo de muestra,
+     `SAMPLE_TYPE_LINKS`);
+   - findings solo WARNING (p. ej. `DUPLICATE_LOINC_DIFF_SPECIMEN`) → incluida
+     y reportada;
+   - ausente de la lista activa → excluida como inactiva.
+3. Crea/actualiza filas `procedure_type` por proveedor:
+   ```
+   grp  OEP{providerId}-{panelId}   ej. OEP2-5      (parent = 0, nivel top)
+     ord OE{providerId}-T{testId}   ej. OE2-T42     (cuelga de su panel vía parent)
+   ```
+   `parent` referencia el **`procedure_type_id`** (PK autoincremental) del grp
+   del panel — no su código. Los códigos son determinísticos por
+   `(proveedor, prueba)` / `(proveedor, panel)`, así que re-importar es
+   idempotente y nunca choca entre laboratorios. Los nombres se truncan a los 63
+   caracteres de la columna sin cortar palabras; la unicidad depende **solo** de
+   `procedure_code`.
+4. Genera una fila `mod_openelis_code_mapping` por prueba importada con
+   `import_source = 'catalog_import'` y el LOINC cuando existe.
+
+La página ofrece una **vista previa** (dry-run, sin escrituras) y una acción
+**confirmar** separada, ambas por AJAX. La importación de **un proveedor**
+corre dentro de una única transacción. `admin_mapping.php` sigue siendo la vía
+de ajuste fino manual y convive (sus filas quedan con `provider_id = 0`,
+`import_source = 'manual'`).
 
 ### 🔧 Interfaz de administración
 
@@ -323,6 +385,15 @@ del módulo:
 |---------|----------|-----------|
 | `catalog.csv` | `test_id, test_name, loinc, section_name, is_active` | Las pruebas, agrupadas por sección |
 | `panels.csv`  | `panel_id, panel_name, test_id, test_name` | Composición de paneles (qué prueba pertenece a qué panel) |
+
+> 🔧 **De dónde salen los CSV.** Se exportan de la base de datos PostgreSQL propia
+> de OpenELIS (el contenedor sidecar `openelisglobal-database`) — el único lugar
+> que conoce secciones, paneles y LOINC. La API REST (p. ej. un usuario tipo
+> "Analyzer import") solo devuelve nombres, no esta estructura. Para **tu propia
+> instancia** se exportan desde el contenedor de la base de datos. Para una
+> **instancia remota/alquilada** donde solo tenés usuario de API (sin acceso a
+> base de datos), pedí al dueño de la instancia estos dos archivos en exactamente
+> este formato.
 
 Desde **Configuración OpenELIS** → **Importar catálogo en procedimientos de
 laboratorio**, se elige un proveedor de laboratorio (el `lab_id` que se estampa en

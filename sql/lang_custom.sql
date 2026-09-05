@@ -179,7 +179,24 @@ INSERT IGNORE INTO `lang_custom` (`lang_description`, `lang_code`, `constant_nam
 ('Spanish (Latin American)', 'el', 'tests',                                                    'pruebas'),
 ('Spanish (Latin American)', 'el', 'mappings',                                                 'mapeos'),
 ('Spanish (Latin American)', 'el', 'Warnings',                                                 'Advertencias'),
-('Spanish (Latin American)', 'el', 'Catalog import failed',                                    'Error al importar el catálogo');
+('Spanish (Latin American)', 'el', 'Catalog import failed',                                    'Error al importar el catálogo'),
+
+-- public/catalog_import.php (bulk catalog import)
+('Spanish (Latin American)', 'el', 'Import Catalog',                                           'Importar Catálogo'),
+('Spanish (Latin American)', 'el', 'Imports the OpenELIS test catalog (panels + ordered tests) into the OpenEMR lab procedure catalog, respecting each provider\'s own catalog. Tests with catalog errors are excluded; warnings are reported. Manual code mappings are never overwritten.', 'Importa el catálogo de pruebas de OpenELIS (paneles + pruebas ordenables) al catálogo de procedimientos de laboratorio de OpenEMR, respetando el catálogo propio de cada proveedor. Las pruebas con errores de catálogo se excluyen; las advertencias se informan. Los mapeos de códigos manuales nunca se sobrescriben.'),
+('Spanish (Latin American)', 'el', 'Lab provider',                                              'Proveedor de laboratorio'),
+('Spanish (Latin American)', 'el', 'Select a lab provider...',                                  'Seleccione un proveedor de laboratorio...'),
+('Spanish (Latin American)', 'el', 'Preview',                                                   'Vista previa'),
+('Spanish (Latin American)', 'el', 'Confirm import',                                            'Confirmar importación'),
+('Spanish (Latin American)', 'el', 'Catalog credentials',                                       'Credenciales de catálogo'),
+('Spanish (Latin American)', 'el', 'OpenELIS ADMIN user for the REST test-catalog API — different from the operational Analyser Import user used to send orders. The importer uses these credentials exclusively.', 'Usuario con rol ADMIN de OpenELIS para la API REST test-catalog: es distinto del usuario operativo Analyser Import que se usa para enviar órdenes. El importador usa estas credenciales exclusivamente.'),
+('Spanish (Latin American)', 'el', 'Catalog login',                                            'Usuario de catálogo'),
+('Spanish (Latin American)', 'el', 'Catalog password',                                          'Contraseña de catálogo'),
+('Spanish (Latin American)', 'el', 'e.g. admin',                                                'ej.: admin'),
+('Spanish (Latin American)', 'el', 'Save credentials',                                          'Guardar credenciales'),
+('Spanish (Latin American)', 'el', 'Catalog credentials saved.',                                'Credenciales de catálogo guardadas.'),
+('Spanish (Latin American)', 'el', 'Go to Settings',                                            'Ir a Configuración'),
+('Spanish (Latin American)', 'el', 'Select a valid lab provider.',                              'Seleccione un proveedor de laboratorio válido.');
 
 -- ============================================================================
 -- SYNC: Populate lang_languages, lang_constants and lang_definitions

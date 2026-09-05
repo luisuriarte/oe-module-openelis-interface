@@ -242,29 +242,37 @@ class ProcedureCatalogImporter
     /**
      * Upsert a code-mapping row (procedure_code -> openelis_test_id).
      *
+     * Rows are tagged with the provider id and import_source = 'catalog_import'
+     * so the REST catalog importer never mistakes them for manual mappings
+     * (which it refuses to overwrite).
+     *
      * @return bool  True if a new mapping was inserted (false on update/exists).
      */
     private function upsertMapping(string $procedureCode, string $procedureName, string $testId): bool
     {
+        $providerId = $this->labId ?? 0;
         $existing = sqlQuery(
-            "SELECT id FROM mod_openelis_code_mapping WHERE openemr_procedure_code = ?",
-            [$procedureCode]
+            "SELECT id FROM mod_openelis_code_mapping
+             WHERE openemr_procedure_code = ? AND provider_id = ?",
+            [$procedureCode, $providerId]
         );
         if ($existing) {
             sqlStatement(
                 "UPDATE mod_openelis_code_mapping
-                 SET openemr_procedure_name = ?, openelis_test_id = ?, is_active = 1
-                 WHERE openemr_procedure_code = ?",
-                [$procedureName, $testId, $procedureCode]
+                 SET openemr_procedure_name = ?, openelis_test_id = ?, is_active = 1,
+                     import_source = 'catalog_import', imported_at = ?
+                 WHERE openemr_procedure_code = ? AND provider_id = ?",
+                [$procedureName, $testId, date('Y-m-d H:i:s'), $procedureCode, $providerId]
             );
             return false;
         }
 
         sqlStatement(
             "INSERT INTO mod_openelis_code_mapping
-                (openemr_procedure_code, openemr_procedure_name, openelis_test_id, is_active)
-             VALUES (?, ?, ?, 1)",
-            [$procedureCode, $procedureName, $testId]
+                (openemr_procedure_code, openemr_procedure_name, openelis_test_id,
+                 is_active, import_source, imported_at, provider_id)
+             VALUES (?, ?, ?, 1, 'catalog_import', ?, ?)",
+            [$procedureCode, $procedureName, $testId, date('Y-m-d H:i:s'), $providerId]
         );
         return true;
     }
