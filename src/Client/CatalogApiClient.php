@@ -75,17 +75,36 @@ class CatalogApiClient
      * List active tests, following pagination until every page is consumed.
      *
      * The endpoint returns a page-shaped JSON document (Spring-style) with a
-     * `total` and a collection under one of {content, records, items, tests,
-     * testItems, elements}. We loop page by page until we collected `total`
-     * items (or a page comes back short when `total` is absent).
+     * `total` and a collection under one of {rows, content, records, items,
+     * tests, testItems, elements}. We loop page by page until we collected
+     * `total` items (or a page comes back short when `total` is absent).
      *
      * @param int $pageSize
      * @return array  Raw test items (id/name/loinc/errorCount/findings/... keys)
      */
     public function listActiveTests(int $pageSize = 500): array
     {
+        return $this->listActiveTestsWithMeta($pageSize)['tests'];
+    }
+
+    /**
+     * Like listActiveTests() but also returns the aggregate counts the API
+     * reports at the root of the first page (totalErrors / totalWarnings /
+     * totalWithIssues), so an importer can show a roll-up summary.
+     *
+     * @return array ['tests' => array, 'meta' => array]
+     */
+    public function listActiveTestsWithMeta(int $pageSize = 500): array
+    {
         $all = [];
         $total = null;
+        $meta = [
+            'total' => null,
+            'totalErrors' => null,
+            'totalWarnings' => null,
+            'totalWithIssues' => null,
+            'totalInfo' => null,
+        ];
 
         for ($page = 0; $page < $this->maxPages; $page++) {
             $data = $this->request('tests', [
@@ -94,10 +113,19 @@ class CatalogApiClient
                 'pageSize' => $pageSize,
             ]);
 
+            if ($page === 0) {
+                foreach (array_keys($meta) as $key) {
+                    if (isset($data[$key])) {
+                        $meta[$key] = (int)$data[$key];
+                    }
+                }
+            }
+
             $pageInfo = self::extractPage($data);
             $items = $pageInfo['items'];
             if ($total === null && $pageInfo['total'] !== null) {
                 $total = $pageInfo['total'];
+                $meta['total'] = $total;
             }
 
             $all = array_merge($all, $items);
@@ -112,7 +140,7 @@ class CatalogApiClient
             }
         }
 
-        return $all;
+        return ['tests' => $all, 'meta' => $meta];
     }
 
     /**
@@ -148,12 +176,10 @@ class CatalogApiClient
         $body = curl_exec($ch);
         if (curl_errno($ch)) {
             $error = curl_error($ch);
-            curl_close($ch);
             throw new \RuntimeException("OpenELIS catalog cURL error: $error");
         }
 
         $status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
 
         if ($status >= 400) {
             throw new OpenElisApiException($status, (string)$body);
@@ -182,12 +208,17 @@ class CatalogApiClient
     /**
      * Normalize a page-shaped response into ['items' => array, 'total' => ?int].
      *
+     * The OpenELIS test-catalog API returns the active-tests page as
+     * {"page", "pageSize", "total", "rows": [...], "totalErrors", ...}, while
+     * panels/panel-test-order come back under other collection keys — all the
+     * candidate keys below are accepted so both shapes work.
+     *
      * @param array $data
      * @return array
      */
     private static function extractPage(array $data): array
     {
-        foreach (['content', 'records', 'items', 'tests', 'testItems', 'elements'] as $key) {
+        foreach (['content', 'records', 'items', 'tests', 'testItems', 'elements', 'rows'] as $key) {
             if (isset($data[$key]) && is_array($data[$key])) {
                 $total = isset($data['total']) ? (int)$data['total'] : null;
                 if ($total === 0) {

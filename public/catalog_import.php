@@ -372,9 +372,13 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
 
         const row = document.createElement('div');
         row.className = 'row g-2 mb-3';
+        const withIssues = s.catalog_totalWithIssues != null
+            ? ' | errores: ' + s.catalog_totalErrors + ' advertencias: ' + s.catalog_totalWarnings
+            : '';
         const cards = [
             ['Panels', s.panels],
             ['Tests importados', s.tests_imported],
+            ['Catálogo activo', s.catalog_total != null ? s.catalog_total + (withIssues || '') : '—'],
             ['Grupos creados', s.groups_created],
             ['Grupos actualizados', s.groups_updated],
             ['Tests creados', s.tests_created],

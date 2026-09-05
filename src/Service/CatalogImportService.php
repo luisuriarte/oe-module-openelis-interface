@@ -76,6 +76,9 @@ class CatalogImportService
      *                  groups_created, groups_updated,
      *                  tests_created, tests_updated,
      *                  mappings_inserted, mappings_updated,
+     *                  catalog_total, catalog_totalErrors,
+     *                  catalog_totalWarnings, catalog_totalWithIssues,
+     *                  catalog_totalInfo (optional, from listActiveTestsWithMeta)
      *                ]
      * @throws \RuntimeException  On validation, HTTP/auth or write failures.
      */
@@ -119,7 +122,21 @@ class CatalogImportService
         ];
 
         $panels = $client->listPanels(false);
-        $activeTests = $this->indexActiveTests($client->listActiveTests());
+
+        // Use the aggregation-aware variant when the client provides it, so we
+        // can surface the API's roll-up counts (totalErrors/totalWarnings/...)
+        // in the import summary. Falls back to the plain list otherwise.
+        if (method_exists($client, 'listActiveTestsWithMeta')) {
+            $active = $client->listActiveTestsWithMeta();
+            $activeTests = $this->indexActiveTests($active['tests']);
+            foreach (['total', 'totalErrors', 'totalWarnings', 'totalWithIssues', 'totalInfo'] as $k) {
+                if (isset($active['meta'][$k]) && $active['meta'][$k] !== null) {
+                    $summary['catalog_' . $k] = $active['meta'][$k];
+                }
+            }
+        } else {
+            $activeTests = $this->indexActiveTests($client->listActiveTests());
+        }
 
         $started = false;
         if (!$dryRun) {

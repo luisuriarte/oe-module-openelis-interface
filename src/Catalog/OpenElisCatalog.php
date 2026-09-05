@@ -176,7 +176,6 @@ class OpenElisCatalog
         $body = curl_exec($ch);
         $errCode = curl_errno($ch);
         $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
 
         $status = $httpCode;
         if ($errCode !== 0 || $httpCode !== 200 || $body === false || $body === '') {

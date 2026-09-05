@@ -185,7 +185,6 @@ class OpenElisApiClient
         $response = curl_exec($ch);
         if (curl_errno($ch)) {
             $error = curl_error($ch);
-            curl_close($ch);
             throw new \RuntimeException("cURL error: $error");
         }
 
@@ -193,7 +192,6 @@ class OpenElisApiClient
         $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
         $headerStr = substr($response, 0, $headerSize);
         $responseBody = substr($response, $headerSize);
-        curl_close($ch);
 
         // Parse response headers
         $headers = [];
