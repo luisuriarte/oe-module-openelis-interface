@@ -78,16 +78,13 @@ openelis/
 │   │   └── 🔌 CatalogApiClient.php       # test-catalog REST client (admin catalog user)
 │   ├── 📂 Mappers/                       # Patient/Practitioner/Order FHIR mappers
 │   └── 📂 Service/                       # Business services
-│       ├── 🗄️ CatalogImportService.php   # Catalog REST → procedure_type + mappings (per provider)
-│       └── 🗄️ ProcedureCatalogImporter.php # Legacy CSV → procedure_type (grp + ord)
+│       └── 🗄️ CatalogImportService.php   # Catalog REST → procedure_type + mappings (per provider)
 │
 ├── 📂 public/                            # ⭐ Web scripts — copied to <openemr_root>/public/modules/openelis/
 │   ├── 🖥️ admin_mapping.php              # Admin UI for code mapping CRUD
 │   ├── 🖥️ pending_orders.php             # Pending orders + Send-to-OpenELIS UI
 │   ├── 🖥️ send_order_action.php          # AJAX endpoint (POST → JSON)
 │   ├── 🖥️ catalog_import.php             # Bulk catalog import (preview + confirm)
-│   ├── 🗂️ catalog.csv                    # OpenELIS test catalog export (drop-in import, legacy)
-│   └── 🗂️ panels.csv                     # OpenELIS panel export (drop-in import, legacy)
 │
 ├── 📂 sql/
 │   └── 📄 lang_custom.sql                # Custom translations
@@ -145,9 +142,9 @@ OpenEMR root `public/modules/openelis/` folder.
         -d "order_id=27" -d "action=send"
    ```
 
-4. After updating the module's `public/` folder (scripts and/or CSV exports),
-   re-copy its contents to the root `public/modules/openelis/` folder so the
-   deployed version stays in sync.
+4. After updating the module's `public/` folder (scripts), re-copy its contents
+   to the root `public/modules/openelis/` folder so the deployed version stays in
+   sync.
 
 ### URL map (production)
 
@@ -156,6 +153,7 @@ OpenEMR root `public/modules/openelis/` folder.
 | `send_order_action.php` | `https://hcd.origen.ar/public/modules/openelis/send_order_action.php` |
 | `pending_orders.php`    | `https://hcd.origen.ar/public/modules/openelis/pending_orders.php` |
 | `admin_mapping.php`     | `https://hcd.origen.ar/public/modules/openelis/admin_mapping.php` |
+| `catalog_import.php`    | `https://hcd.origen.ar/public/modules/openelis/catalog_import.php` |
 
 > ⚠️ **Root detection:** The scripts locate OpenEMR's `globals.php` automatically
 > by walking up from their own directory. They check both `<dir>/globals.php` and
@@ -192,7 +190,7 @@ OpenEMR root `public/modules/openelis/` folder.
 
 3. **Enable the module:**
    - In the Module Manager, click **Enable** on the OpenELIS Interface module
-   - The "OpenELIS" submenu (Import Catalog, Pending Orders, Code Mapping, Settings) will appear under the Lab section
+   - The "OpenELIS" submenu (Import Catalog, Pending Orders, Code Mapping) will appear under the Lab section
 
 4. **Verify installation:**
 
@@ -292,11 +290,16 @@ Features:
 ```php
 use OpenEMR\Modules\OpenElis\CodeMappingService;
 
+// Mappings are scoped per lab: always pass the target provider
+// (procedure_providers.ppid). A provider_id = 0 row (legacy/unassigned)
+// acts as the fallback when the provider has no dedicated mapping.
+$labId = 4; // procedure_providers.ppid of the OpenELIS lab
+
 // Returns openelis_test_id or null
-$elisTestId = CodeMappingService::resolveOpenElisTestId('GLUC-001');
+$elisTestId = CodeMappingService::resolveOpenElisTestId('GLUC-001', $labId);
 
 // Returns openelis_test_id or falls back to the original code
-$elisTestId = CodeMappingService::resolveWithFallback('GLUC-001');
+$elisTestId = CodeMappingService::resolveWithFallback('GLUC-001', $labId);
 // If mapped: returns "42"
 // If not mapped: returns "GLUC-001"
 ```
@@ -304,10 +307,11 @@ $elisTestId = CodeMappingService::resolveWithFallback('GLUC-001');
 #### Batch resolution
 
 ```php
+$labId = 4; // procedure_providers.ppid of the target lab
 $procedureCodes = ['GLUC-001', 'HEMO-002', 'BIO-003'];
 
 foreach ($procedureCodes as $code) {
-    $elisId = CodeMappingService::resolveOpenElisTestId($code);
+    $elisId = CodeMappingService::resolveOpenElisTestId($code, $labId);
     if ($elisId !== null) {
         // ✅ Mapped — send to OpenELIS
         sendOrderToElis($elisId);
@@ -363,10 +367,9 @@ user/password, not database credentials):
 |----------|--------|-------|
 | `/OpenELIS-Global/rest/TestNamesProvider?testId={id}` | GET | Returns one test's name (`name.spanish` / `name.english`) for a single numeric id. `testId=all` → HTTP 500, so ids are probed one by one across a configurable range. Does NOT return LOINC. |
 
-- The synchronizer (`src/Catalog/OpenElisCatalog.php`) is triggered from
-  **OpenELIS Settings** (`public/openelis_config.php`). It iterates the
-  configured id range and stores results in the local mirror table
-  `mod_openelis_test_catalog`.
+- The local mirror table `mod_openelis_test_catalog` is kept fresh by the
+  catalog import (`public/catalog_import.php` / `CatalogImportService`), which
+  upserts every imported test by its OpenELIS id.
 - The mapping page (`public/admin_mapping.php`) reads that local mirror to
   autosuggest the OpenELIS test id/name when assigning a mapping — no per-keystroke
   API calls.
@@ -374,48 +377,16 @@ user/password, not database credentials):
 - The prior design (reading OpenELIS's `clinlims.*` PostgreSQL tables directly)
   was abandoned because the lab does not share database credentials.
 
-### Importing the catalog into the procedure tree
+### Importing the catalog (was CSV import)
 
-The REST `TestNamesProvider` endpoint returns only a test's **name** by id — it
-does not expose the **panel structure** or the **section grouping**. To build the
-OpenEMR procedure catalog faithfully, the lab exports the catalog as two CSV
-files that the admin drops next to the module's deployed scripts:
-
-| File | Columns | Purpose |
-|------|---------|---------|
-| `catalog.csv` | `test_id, test_name, loinc, section_name, is_active` | The tests, grouped by section |
-| `panels.csv`  | `panel_id, panel_name, test_id, test_name` | Panel composition (which test belongs to which panel) |
-
-> 🔧 **Where the CSVs come from.** They are exported from OpenELIS's own
-> PostgreSQL database (the `openelisglobal-database` sidecar container) — the only
-> place that knows sections, panels and LOINC. The REST API (a "Analyzer import"
-> user, for instance) exposes names only, not this structure. For **your own
-> instance** you export them from the database container. For a **remote/rented
-> instance** where you only have an API user (no database access), request these
-> two files from the instance owner in exactly this format.
-
-From **OpenELIS Settings** → **Import catalog into lab procedures**, pick a lab
-provider (the `lab_id` stamped on imported rows) and import. The importer
-(`src/Service/ProcedureCatalogImporter.php`) builds the `procedure_type` tree:
-
-```
-grp  OES-<section>                        e.g. OES-hematology ("Hematology")
-  grp  OEP-<panel_id>                     e.g. OEP-2 ("NFS") nested in its section
-    ord  OE-<test_id>                     e.g. OE-13 (hangs from its panel)
-  ord  OE-<test_id>                       tests not in a panel hang from the section
-```
-
-Because `procedure_type` allows only **one parent per row**, a test hangs either
-from its panel or (if it belongs to no panel) directly from its section group.
-The LOINC column is stored in `procedure_type.standard_code` as `LOINC:<code>`.
-As a convenience, each test also gets a `mod_openelis_code_mapping` row
-(`OE-<test_id>` → `<test_id>`), so imported tests are immediately sendable.
-Re-importing updates rows in place (no duplicates).
-
-> ⚠️ In production the CSVs must be placed in the **same folder as the deployed
-> `openelis_config.php`** (i.e. `<root>/public/modules/openelis/`), because the
-> importer reads them relative to the script directory. In dev that is
-> `oe-module-openelis-interface/public/`.
+Earlier versions imported the catalog from two CSV export files dropped next to
+the deployed scripts (`catalog.csv` / `panels.csv`, via
+`src/Service/ProcedureCatalogImporter.php`) from the **OpenELIS Settings** page.
+That page, the CSV importer class and the sample files have been **removed**.
+The REST-based import in [`catalog_import.php`](#-catalog-import-rest--catalog_importphp)
+covers the same goal (panels + ordered tests → `procedure_type` tree +
+`mod_openelis_code_mapping`) using each provider's ADMIN catalog credentials,
+without requiring database access or CSV exports.
 
 ### OpenELIS FHIR Capability Reference
 

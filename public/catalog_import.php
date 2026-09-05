@@ -16,7 +16,7 @@
 
 // Resolve the OpenEMR root by walking up until globals.php is found.
 // Works both in the module (dev) and when copied to <root>/public/modules/<name>/ (prod).
-// Peers with the same resolver in admin_mapping.php, openelis_config.php, etc.
+// Peers with the same resolver in admin_mapping.php, pending_orders.php, etc.
 $__oeRoot = __DIR__;
 $__found = null;
 for ($i = 0; $i < 15; $i++) {
@@ -206,9 +206,6 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
         <div class="d-flex gap-2">
             <a href="<?php echo attr($scriptsUrl . 'admin_mapping.php'); ?>" class="btn btn-secondary">
                 <?php echo xlt("Go to Code Mapping"); ?>
-            </a>
-            <a href="<?php echo attr($scriptsUrl . 'openelis_config.php'); ?>" class="btn btn-secondary">
-                <?php echo xlt("Go to Settings"); ?>
             </a>
         </div>
     </div>

@@ -91,8 +91,10 @@ if (!AclMain::aclCheckCore('admin', 'super')) {
 
 use OpenEMR\Modules\OpenElis\Catalog\OpenElisCatalog;
 
-// Load the local OpenELIS test-catalog mirror for autosuggestion. If the
-// mirror is empty (not yet synced), show a hint linking to the settings page.
+// Load the local OpenELIS test-catalog mirror for autosuggestion. The mirror
+// (mod_openelis_test_catalog) is populated by the catalog import
+// (catalog_import.php / CatalogImportService). If it is empty (not yet
+// imported), show a hint linking to the import page.
 $catalogRows = [];
 $catalogCount = 0;
 try {
@@ -560,8 +562,8 @@ $webRoot = $GLOBALS['webroot'] ?? '';
 
     <?php if ($catalogCount === 0): ?>
         <div class="alert alert-warning">
-            <?php echo xlt("The OpenELIS test catalog is empty. Synchronize it first from"); ?>
-            <a href="<?php echo attr($webRoot . '/public/modules/openelis/openelis_config.php'); ?>"><?php echo xlt("OpenELIS Settings"); ?></a>.
+            <?php echo xlt("The OpenELIS test catalog is empty. Import it first via"); ?>
+            <a href="<?php echo attr($webRoot . '/public/modules/openelis/catalog_import.php'); ?>"><?php echo xlt("Import Catalog"); ?></a>.
         </div>
     <?php endif; ?>
 

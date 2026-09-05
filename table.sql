@@ -112,42 +112,19 @@ ALTER TABLE `procedure_order` ADD COLUMN `mod_openelis_order_id` VARCHAR(64) DEF
 -- =============================================================================
 -- mod_openelis_config
 -- =============================================================================
--- PURPOSE
---   Key/value store for module configuration, editable via the "OpenELIS
---   Settings" page (public/openelis_config.php). Keys used by the test-catalog
---   synchronizer (src/Catalog/OpenElisCatalog.php):
---     catalog_min_id, catalog_max_id
---       The inclusive numeric id range probed against the OpenELIS REST
---       endpoint /OpenELIS-Global/rest/TestNamesProvider?testId={id}. That
---       endpoint only accepts a single integer id (testId=all returns 500), so
---       the catalog is built by iterating this range. Defaults to 1..500.
---     api_user, api_pass
---       Optional API user/password for the catalog REST endpoint. If left
---       blank, the synchronizer falls back to the lab provider credentials in
---       procedure_providers (login / password / protocol = 'WS'), which the
---       send flow (FHIR) also uses. Storing them here lets the admin use a
---       dedicated API credential that may differ from the FHIR one, without
---       opening PostgreSQL access.
---
---   Why REST and not direct SQL:
---     The OpenELIS FHIR API (HAPI) on this instance does not expose a
---     test-catalog resource (ObservationDefinition is unknown; Observation and
---     ServiceRequest are for results/orders only). The standalone REST endpoint
---     /rest/TestNamesProvider?testId={id} is the supported way to read a test's
---     name (Spanish/English) by its numeric id. It does NOT return LOINC, so
---     LOINC must be entered manually in the mapping (optional).
---
---   SECURITY NOTE
---     api_pass is stored plaintext in OpenEMR's database, consistent with how
---     OpenEMR already stores procedure provider passwords. It is never logged
---     and never sent to the browser; the password field is shown blank with a
---     "keep existing" behavior on save.
+-- LEGACY: key/value store formerly edited from the "OpenELIS Settings" page
+-- (public/openelis_config.php, removed). OpenElisCatalog still reads these keys
+-- (catalog_min_id / catalog_max_id id-probing range, api_user / api_pass) with
+-- sensible defaults, but nothing writes them anymore: the catalog is now
+-- imported via catalog_import.php using each provider's own ADMIN catalog
+-- credentials (procedure_providers.mod_openelis_catalog_login / password).
+-- The table is kept so existing installations keep working.
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS `mod_openelis_config` (
   `cfg_name` varchar(64) NOT NULL
-      COMMENT 'Configuration key name (e.g. catalog_min_id, catalog_max_id, api_user, api_pass)',
+      COMMENT 'Configuration key name (legacy: catalog_min_id, catalog_max_id, api_user, api_pass)',
   `cfg_value` varchar(255) DEFAULT NULL
-      COMMENT 'Configuration value (plaintext; see security note in the header of this CREATE statement)',
+      COMMENT 'Configuration value (plaintext; see the legacy note in the header of this CREATE statement)',
   PRIMARY KEY (`cfg_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 #EndIf
@@ -157,15 +134,18 @@ CREATE TABLE IF NOT EXISTS `mod_openelis_config` (
 -- mod_openelis_test_catalog
 -- =============================================================================
 -- PURPOSE
---   Local mirror of the OpenELIS test catalog (numeric test id -> display name),
---   populated by src/Catalog/OpenElisCatalog.php synchronizing
---   via the REST endpoint /OpenELIS-Global/rest/TestNamesProvider?testId={id}.
+--   Local mirror of the OpenELIS test catalog (numeric test id -> display name).
+--
+--   Kept fresh by the catalog import (catalog_import.php /
+--   src/Service/CatalogImportService.php), which upserts every imported test
+--   (previously this was done by OpenElisCatalog's id-probing synchronizer,
+--   triggered from the removed "OpenELIS Settings" page).
 --
 --   The mapping page (public/admin_mapping.php) reads this table for
 --   autosuggestion (datalist) when assigning openelis_test_id / name to an
 --   OpenEMR procedure, without re-hitting the remote API on every keystroke.
 --
---   This REST endpoint returns only the test NAME (Spanish/English) — it does
+--   The REST endpoint returns only the test NAME (Spanish/English) — it does
 --   NOT provide a LOINC code, so LOINC is not stored here and must be entered
 --   manually in the mapping (optional).
 -- =============================================================================

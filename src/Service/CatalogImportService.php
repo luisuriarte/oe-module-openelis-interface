@@ -219,6 +219,13 @@ class CatalogImportService
                         ];
                     }
 
+                    // Keep the mapping page's autosuggest mirror
+                    // (mod_openelis_test_catalog) fresh with every confirmed
+                    // import — never on a preview.
+                    if (!$dryRun) {
+                        $this->mirrorUpsert($testId, $testName);
+                    }
+
                     // Conflict: a human already mapped this (provider, test)
                     // manually. Refresh its panel metadata only, never the
                     // mapping itself, and skip creating an auto row.
@@ -348,6 +355,23 @@ class CatalogImportService
             );
         }
         return true;
+    }
+
+    /**
+     * Keep the mapping page's autosuggest mirror (mod_openelis_test_catalog)
+     * in sync with the imported tests. Idempotent upsert keyed by the OpenELIS
+     * test id. The REST payload exposes a single display name, so the same
+     * value is stored in both language columns.
+     */
+    private function mirrorUpsert(string $testId, string $displayName): void
+    {
+        $name = $this->truncateName($displayName, 255);
+        sqlStatement(
+            "INSERT INTO mod_openelis_test_catalog (openelis_test_id, name_es, name_en)
+             VALUES (?, ?, ?)
+             ON DUPLICATE KEY UPDATE name_es = VALUES(name_es), name_en = VALUES(name_en)",
+            [$testId, $name, $name]
+        );
     }
 
     /**

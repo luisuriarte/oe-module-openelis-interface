@@ -10,7 +10,6 @@ INSERT IGNORE INTO `lang_custom` (`lang_description`, `lang_code`, `constant_nam
 -- src/Bootstrap.php (OpenELIS parent menu + children labels)
 ('Spanish (Latin American)', 'el', 'OpenELIS',                                                       'OpenELIS'),
 ('Spanish (Latin American)', 'el', 'Code Mapping',                                                    'Mapeo de Códigos'),
-('Spanish (Latin American)', 'el', 'Settings',                                                        'Configuración'),
 
 -- public/admin_mapping.php (page title / header)
 ('Spanish (Latin American)', 'el', 'Access denied',                                          'Acceso denegado'),
@@ -143,47 +142,6 @@ INSERT IGNORE INTO `lang_custom` (`lang_description`, `lang_code`, `constant_nam
 ('Spanish (Latin American)', 'el', 'Lab provider protocol must be set to Web Services (WS) to send orders via OpenELIS', 'El protocolo del proveedor de laboratorio debe configurarse como Web Services (WS) para enviar órdenes vía OpenELIS'),
 ('Spanish (Latin American)', 'el', 'Internal error',                                          'Error interno'),
 
--- public/openelis_config.php (settings page)
-('Spanish (Latin American)', 'el', 'OpenELIS Settings',                                        'Configuración OpenELIS'),
-('Spanish (Latin American)', 'el', 'Catalog of OpenELIS tests, read over the REST API. You can enter a dedicated API user/password here, or leave it blank to reuse the lab provider credentials (procedure_providers, protocol = WS). No database credentials are needed.', 'Catálogo de pruebas de OpenELIS leído mediante la API REST. Puede ingresar aquí un usuario/contraseña de API dedicado, o dejarlo en blanco para reutilizar las credenciales del proveedor de laboratorio (procedure_providers, protocol = WS). No se requieren credenciales de base de datos.'),
-('Spanish (Latin American)', 'el', 'Synchronize test catalog',                                 'Sincronizar catálogo de pruebas'),
-('Spanish (Latin American)', 'el', 'Local mirror',                                             'Espejo local'),
-('Spanish (Latin American)', 'el', 'last sync',                                                'última sincronización'),
-('Spanish (Latin American)', 'el', 'Sync now',                                                 'Sincronizar ahora'),
-('Spanish (Latin American)', 'el', 'tests stored',                                             'pruebas almacenadas'),
-('Spanish (Latin American)', 'el', 'Stopped after a run of inactive ids (probed up to',        'Se detuvo tras una serie de id inactivos (se probó hasta'),
-('Spanish (Latin American)', 'el', 'Catalog sync failed',                                      'Error al sincronizar el catálogo'),
-('Spanish (Latin American)', 'el', 'OpenELIS API credentials',                                 'Credenciales de la API OpenELIS'),
-('Spanish (Latin American)', 'el', 'User/password for the test-catalog REST endpoint. Leave the user blank to fall back to the lab provider credentials (procedure_providers, protocol = WS).', 'Usuario/contraseña para el endpoint REST del catálogo de pruebas. Deje el usuario en blanco para reutilizar las credenciales del proveedor de laboratorio (procedure_providers, protocol = WS).'),
-('Spanish (Latin American)', 'el', 'API user',                                                 'Usuario de API'),
-('Spanish (Latin American)', 'el', 'API password',                                             'Contraseña de API'),
-('Spanish (Latin American)', 'el', 'A password is stored. Leave blank to keep it.',            'Hay una contraseña almacenada. Déjela en blanco para conservarla.'),
-('Spanish (Latin American)', 'el', 'Optional - falls back to provider credentials.',           'Opcional: reutiliza las credenciales del proveedor.'),
-('Spanish (Latin American)', 'el', 'Id probing range',                                         'Rango de sondeo de id'),
-('Spanish (Latin American)', 'el', 'The endpoint /OpenELIS-Global/rest/TestNamesProvider?testId={id} only accepts one integer id at a time (testId=all fails), so the catalog is built by iterating this range. Increase the max if new tests are added beyond it.', 'El endpoint /OpenELIS-Global/rest/TestNamesProvider?testId={id} solo acepta un id entero a la vez (testId=all falla), por lo que el catálogo se construye iterando este rango. Aumente el máximo si se agregan pruebas más allá de él.'),
-('Spanish (Latin American)', 'el', 'From id',                                                  'Desde id'),
-('Spanish (Latin American)', 'el', 'To id',                                                    'Hasta id'),
-('Spanish (Latin American)', 'el', 'Save Configuration',                                       'Guardar Configuración'),
-('Spanish (Latin American)', 'el', 'Go to Code Mapping',                                       'Ir al Mapeo de Códigos'),
-('Spanish (Latin American)', 'el', 'Configuration saved.',                                     'Configuración guardada.'),
-
--- Import catalog into lab procedures (CSV)
-('Spanish (Latin American)', 'el', 'Import catalog into lab procedures',                       'Importar catálogo en procedimientos de laboratorio'),
-('Spanish (Latin American)', 'el', 'Reads catalog.csv and panels.csv from this module\'s public folder and creates the lab procedure tree (groups + orderable tests) in the OpenEMR procedure catalog, tagged with the selected lab provider.', 'Lee catalog.csv y panels.csv de la carpeta public de este módulo y crea el árbol de procedimientos de laboratorio (grupos + pruebas ordenables) en el catálogo de procedimientos de OpenEMR, identificadas con el proveedor de laboratorio seleccionado.'),
-('Spanish (Latin American)', 'el', 'Lab provider (lab_id)',                                    'Proveedor de laboratorio (lab_id)'),
-('Spanish (Latin American)', 'el', 'Select a provider...',                                     'Seleccione un proveedor...'),
-('Spanish (Latin American)', 'el', 'CSV files',                                                'Archivos CSV'),
-('Spanish (Latin American)', 'el', 'Import CSV',                                               'Importar CSV'),
-('Spanish (Latin American)', 'el', 'No active lab providers found. Configure one in the lab providers section first.', 'No se encontraron proveedores de laboratorio activos. Configure uno en la sección de proveedores de laboratorio primero.'),
-('Spanish (Latin American)', 'el', 'Select a lab provider to import the catalog for.',         'Seleccione un proveedor de laboratorio para importar el catálogo.'),
-('Spanish (Latin American)', 'el', 'Catalog imported',                                         'Catálogo importado'),
-('Spanish (Latin American)', 'el', 'groups',                                                   'grupos'),
-('Spanish (Latin American)', 'el', 'panels',                                                   'paneles'),
-('Spanish (Latin American)', 'el', 'tests',                                                    'pruebas'),
-('Spanish (Latin American)', 'el', 'mappings',                                                 'mapeos'),
-('Spanish (Latin American)', 'el', 'Warnings',                                                 'Advertencias'),
-('Spanish (Latin American)', 'el', 'Catalog import failed',                                    'Error al importar el catálogo'),
-
 -- public/catalog_import.php (bulk catalog import)
 ('Spanish (Latin American)', 'el', 'Import Catalog',                                           'Importar Catálogo'),
 ('Spanish (Latin American)', 'el', 'Imports the OpenELIS test catalog (panels + ordered tests) into the OpenEMR lab procedure catalog, respecting each provider\'s own catalog. Tests with catalog errors are excluded; warnings are reported. Manual code mappings are never overwritten.', 'Importa el catálogo de pruebas de OpenELIS (paneles + pruebas ordenables) al catálogo de procedimientos de laboratorio de OpenEMR, respetando el catálogo propio de cada proveedor. Las pruebas con errores de catálogo se excluyen; las advertencias se informan. Los mapeos de códigos manuales nunca se sobrescriben.'),
@@ -191,6 +149,8 @@ INSERT IGNORE INTO `lang_custom` (`lang_description`, `lang_code`, `constant_nam
 ('Spanish (Latin American)', 'el', 'Select a lab provider...',                                  'Seleccione un proveedor de laboratorio...'),
 ('Spanish (Latin American)', 'el', 'Preview',                                                   'Vista previa'),
 ('Spanish (Latin American)', 'el', 'Confirm import',                                            'Confirmar importación'),
+('Spanish (Latin American)', 'el', 'No active lab providers found. Configure one in the lab providers section first.', 'No se encontraron proveedores de laboratorio activos. Configure uno en la sección de proveedores de laboratorio primero.'),
+('Spanish (Latin American)', 'el', 'Go to Code Mapping',                                       'Ir al Mapeo de Códigos'),
 -- patched core form interface/orders/procedure_provider_edit.php
 -- (OpenELIS catalog credentials section, see patches/procedure_provider_edit.php)
 ('Spanish (Latin American)', 'el', 'OpenELIS Catalog Login',                                      'Usuario de catálogo OpenELIS'),
@@ -199,7 +159,6 @@ INSERT IGNORE INTO `lang_custom` (`lang_description`, `lang_code`, `constant_nam
 ('Spanish (Latin American)', 'el', 'OpenELIS ADMIN user for the REST test-catalog API - different from the operational user used to send orders (Login/Password above).', 'Usuario con rol ADMIN de OpenELIS para la API REST test-catalog: es distinto del usuario operativo usado para enviar órdenes (Login/Password de más arriba).'),
 ('Spanish (Latin American)', 'el', 'This second credential set is used by the module\'s bulk catalog import (catalog_import.php). Assign the ADMIN role to this OpenELIS user in the OpenELIS admin UI.', 'Este segundo par de credenciales lo usa la importación masiva de catálogo del módulo (catalog_import.php). Asigne el rol ADMIN a este usuario de OpenELIS en la interfaz de administración de OpenELIS.'),
 ('Spanish (Latin American)', 'el', 'The password is never sent back to the browser: leave the field blank to keep the stored value.', 'La contraseña nunca vuelve al navegador: deje el campo en blanco para conservar el valor almacenado.'),
-('Spanish (Latin American)', 'el', 'Go to Settings',                                            'Ir a Configuración'),
 ('Spanish (Latin American)', 'el', 'Select a valid lab provider.',                              'Seleccione un proveedor de laboratorio válido.');
 
 -- ============================================================================

@@ -88,6 +88,15 @@ $filter = $_GET['filter'] ?? 'pending'; // pending | all | sent | error
 $where = "po.activity = 1";
 $params = [];
 
+// Only orders destined for the OpenELIS lab. The OpenELIS provider is the
+// active Web Services (WS) provider that also holds the module's catalog
+// credentials (mod_openelis_catalog_login) — the same marker used by
+// CatalogImportService::validateProvider(). This excludes plain HL7/DL labs
+// (e.g. LAB01) and WS providers meant for other purposes (e.g. a PACS/viewer
+// like Imagen Services), so the page only ever lists OpenELIS orders.
+$where .= " AND pp.protocol = 'WS'"
+    . " AND pp.mod_openelis_catalog_login IS NOT NULL AND pp.mod_openelis_catalog_login != ''";
+
 if ($filter === 'pending') {
     $where .= " AND po.mod_openelis_sync_status IS NULL AND po.date_transmitted IS NULL";
 } elseif ($filter === 'sent') {
@@ -136,12 +145,17 @@ while ($row = sqlFetchArray($rs)) {
     $row['test_count'] = (int)($codeCount['total'] ?? 0);
 
     // Count how many tests have LOINC codes mapped
+    // Scoped to the order's lab (po.lab_id) so the badge reflects the mapping
+    // for the destination provider, not a generic/other lab mapping with the
+    // same procedure code. See CodeMappingService for the same multi-lab rule.
     $mappedCount = sqlQuery(
         "SELECT COUNT(*) AS total
          FROM procedure_order_code poc
+         INNER JOIN procedure_order po ON po.procedure_order_id = poc.procedure_order_id
          INNER JOIN mod_openelis_code_mapping m ON poc.procedure_code = m.openemr_procedure_code
          WHERE poc.procedure_order_id = ? AND poc.do_not_send = 0
-           AND m.is_active = 1 AND m.loinc_code IS NOT NULL AND m.loinc_code != ''",
+           AND m.is_active = 1 AND m.loinc_code IS NOT NULL AND m.loinc_code != ''
+           AND m.provider_id = po.lab_id",
         [$row['procedure_order_id']]
     );
     $row['mapped_count'] = (int)($mappedCount['total'] ?? 0);

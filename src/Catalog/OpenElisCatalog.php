@@ -87,7 +87,7 @@ class OpenElisCatalog
             if (empty($provider)) {
                 throw new \RuntimeException(
                     "No API credentials configured and no active Web Services (WS) lab provider found. "
-                    . "Set them in OpenELIS Settings, or configure a WS provider in the lab provider settings."
+                    . "Configure a WS provider in the lab provider settings."
                 );
             }
             $login = $provider['login'];

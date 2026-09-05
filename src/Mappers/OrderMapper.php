@@ -15,16 +15,19 @@ class OrderMapper
      * @param array $orderCode       Row from procedure_order_code
      * @param string $openelisPatientRef  Patient ID in OpenELIS (e.g. "Patient/uuid")
      * @param string $openelisPractitionerRef  Practitioner ID in OpenELIS
+     * @param int $providerId        procedure_providers.ppid of the target lab —
+     *                               scopes the mapping lookup (CodeMappingService)
      * @return array FHIR ServiceRequest resource
      */
     public static function toFhirServiceRequest(
         array $procedureOrder,
         array $orderCode,
         string $openelisPatientRef,
-        string $openelisPractitionerRef
+        string $openelisPractitionerRef,
+        int $providerId
     ): array {
         $procedureCode = $orderCode['procedure_code'] ?? '';
-        $mapping = CodeMappingService::resolveMapping($procedureCode);
+        $mapping = CodeMappingService::resolveMapping($procedureCode, $providerId);
 
         $resource = [
             'resourceType' => 'ServiceRequest',
@@ -56,11 +59,13 @@ class OrderMapper
      *
      * @param string $openelisPatientRef  Patient ID in OpenELIS
      * @param string $procedureCode       OpenEMR procedure code
+     * @param int $providerId        procedure_providers.ppid of the target lab —
+     *                               scopes the SNOMED lookup (CodeMappingService)
      * @return array FHIR Specimen resource
      */
-    public static function toFhirSpecimen(string $openelisPatientRef, string $procedureCode): array
+    public static function toFhirSpecimen(string $openelisPatientRef, string $procedureCode, int $providerId): array
     {
-        $snomedCodes = CodeMappingService::resolveSnomedCodes($procedureCode);
+        $snomedCodes = CodeMappingService::resolveSnomedCodes($procedureCode, $providerId);
 
         $resource = [
             'resourceType' => 'Specimen',

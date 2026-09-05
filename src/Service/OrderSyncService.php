@@ -186,7 +186,7 @@ class OrderSyncService
 
             foreach ($codes as $code) {
                 $procedureCode = $code['procedure_code'] ?? '';
-                $openelisTestId = CodeMappingService::resolveOpenElisTestId($procedureCode);
+                $openelisTestId = CodeMappingService::resolveOpenElisTestId($procedureCode, (int)$provider['ppid']);
 
                 // Skip only if there's no mapping at all — neither an explicit
                 // openelis_test_id nor a procedure code that OpenELIS can resolve.
@@ -206,7 +206,8 @@ class OrderSyncService
                     $order,
                     $code,
                     $patientRef,
-                    $practitionerRef
+                    $practitionerRef,
+                    (int)$provider['ppid']
                 );
                 $entries[] = [
                     'resource' => $serviceRequest,
@@ -214,7 +215,7 @@ class OrderSyncService
                 ];
 
                 // Specimen
-                $specimen = OrderMapper::toFhirSpecimen($patientRef, $procedureCode);
+                $specimen = OrderMapper::toFhirSpecimen($patientRef, $procedureCode, (int)$provider['ppid']);
                 $entries[] = [
                     'resource' => $specimen,
                     'fullUrl' => 'urn:uuid:' . uniqid('sp-', true),
