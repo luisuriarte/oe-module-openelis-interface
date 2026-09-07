@@ -18,12 +18,31 @@ use OpenEMR\Modules\OpenElis\Client\CatalogApiClient;
  *          - WARNING-only findings (e.g. DUPLICATE_LOINC_DIFF_SPECIMEN) ->
  *            INCLUDED but reported so the admin is aware.
  *          - not present in the active list                 -> EXCLUDED (inactive).
- *     3. Creates/updates OpenEMR procedure_type rows:
- *          grp  OEP{providerId}-{panelId}   ... one per panel (parent = 0, top)
- *            ord OE{providerId}-T{testId}   ... one per valid test, hanging
- *                                              from its panel via `parent`
- *        and a mod_openelis_code_mapping row per test (import_source =
- *        'catalog_import') so the imported codes are immediately sendable.
+* 3. Creates/updates OpenEMR procedure_type rows:
+     *          grp  OEP{providerId}-{panelId}   ... one per panel (parent = 0, top)
+     *            ord OE{providerId}-T{testId}   ... one per valid test, hanging
+     *                                              from its panel via `parent`
+     *        and a mod_openelis_code_mapping row per test (import_source =
+     *        'catalog_import') so the imported codes are immediately sendable.
+*     4. For every test, extracts the catalog's sample type NAME
+ *        (sampleType in the REST payload) and resolves it to a SNOMED-CT
+ *        specimen code through mod_openelis_specimen_map. The resolved code
+ *        is stored on the mapping row (snomed_specimen); sample types with
+ *        no code yet are auto-INSERTed into the map (snomed_code NULL) and
+ *        reported under the summary's `specimen_unmapped`, so that missing
+ *        codes surface as a one-time curation task instead of a silent gap.
+ *     5. DISPLAY SUFFIX: every imported grp/ord row carries the provider name
+ *        as a visible suffix (`{Test} · {Lab}`) so that the same analysis
+ *        ordered from different labs is distinguishable in OpenEMR's native
+ *        procedure picker. The mapping row's openemr_procedure_name and the
+ *        autosuggest mirror keep the CLEAN test name (never the suffix).
+ *     6. RECONCILIATION: module-owned rows of THIS provider (OE{p}-T* ords and
+ *        OEP{p}-* grps) that this import no longer references are DEACTIVATED
+ *        (activity = 0) — never deleted — and their auto mappings pass to
+ *        is_active = 0. Rows that come back (activity 0 -> 1) are logged as
+ *        reactivated. Both transitions are reported in the summary so no test
+ *        silently appears or disappears from the orderable tree. A dry-run
+ *        previews what would change without writing anything.
  *
  * CODE SCHEME (deterministic / idempotent, never collides across labs)
  *   OE{providerId}-T{testId}   e.g. OE2-T42
@@ -52,6 +71,9 @@ class CatalogImportService
     /** @var array|null Injected provider row (overrides the one read from the DB). */
     private ?array $providerOverride;
 
+    /** procedure_type.name is varchar(63). */
+    private const PROCEDURE_TYPE_NAME_MAX = 63;
+
     public function __construct(?CatalogApiClient $clientOverride = null, ?array $providerOverride = null)
     {
         $this->clientOverride = $clientOverride;
@@ -73,9 +95,14 @@ class CatalogImportService
      *                  inactive_missing => [testId => ['name','messages']],
      *                  tests_with_warnings => [testId => ['name','messages']],
      *                  conflicts => [testId => ['mapping_id','procedure_code','procedure_name']],
+     *                  specimen_unmapped => [sample_type => ['tests' => int, 'example' => string]],
      *                  groups_created, groups_updated,
      *                  tests_created, tests_updated,
      *                  mappings_inserted, mappings_updated,
+     *                  deactivated_panels => [code => name],
+     *                  deactivated_tests  => [code => name],
+     *                  reactivated_panels => [code => name],
+     *                  reactivated_tests  => [code => name],
      *                  catalog_total, catalog_totalErrors,
      *                  catalog_totalWarnings, catalog_totalWithIssues,
      *                  catalog_totalInfo (optional, from listActiveTestsWithMeta)
@@ -113,12 +140,17 @@ class CatalogImportService
             'inactive_missing' => [],
             'tests_with_warnings' => [],
             'conflicts' => [],
+            'specimen_unmapped' => [],
             'groups_created' => 0,
             'groups_updated' => 0,
             'tests_created' => 0,
             'tests_updated' => 0,
             'mappings_inserted' => 0,
             'mappings_updated' => 0,
+            'deactivated_panels' => [],
+            'deactivated_tests' => [],
+            'reactivated_panels' => [],
+            'reactivated_tests' => [],
         ];
 
         $panels = $client->listPanels(false);
@@ -146,6 +178,9 @@ class CatalogImportService
 
         try {
             $panelSeq = 0;
+            $seenPanelCodes = [];
+            $seenTestCodes = [];
+            $emptyMembersPanels = [];
             foreach ($panels as $panel) {
                 $panelSeq++;
                 $panelId = $this->pick($panel, ['panel_id', 'id', 'guid', 'code']);
@@ -157,6 +192,10 @@ class CatalogImportService
 
                 $members = $client->listPanelTests($panelId);
                 if (empty($members)) {
+                    // A transient empty member list must never look like the
+                    // whole panel vanished: record it so reconcileAbsent() can
+                    // skip (safe) the test deactivation pass.
+                    $emptyMembersPanels[] = (string)$panelId;
                     continue;
                 }
 
@@ -164,20 +203,26 @@ class CatalogImportService
                 // procedure_type_id (the AUTO_INCREMENT primary key) of the
                 // panel grp — NOT its procedure_code. upsertGroup() returns
                 // that id and each ord hangs from it.
+                $panelCode = $this->panelCode($providerId, $panelId);
+                $panelDisplayName = $this->displayName($panelName, $providerName);
                 $grpResult = $this->upsertGroup(
-                    $this->panelCode($providerId, $panelId),
-                    $this->truncateName($panelName),
+                    $panelCode,
+                    $panelDisplayName,
                     $providerId,
                     $panelSeq,
                     $dryRun
                 );
                 $grpId = $grpResult['id'];
+                $seenPanelCodes[$panelCode] = true;
 
                 $summary['panels']++;
                 if ($grpResult['created']) {
                     $summary['groups_created']++;
                 } else {
                     $summary['groups_updated']++;
+                }
+                if ($grpResult['reactivated']) {
+                    $summary['reactivated_panels'][$panelCode] = $panelDisplayName;
                 }
 
                 $ordSeq = 0;
@@ -189,6 +234,12 @@ class CatalogImportService
                     }
                     $testName = $this->pick($member, ['test_name', 'testName', 'name', 'name_en', 'name_es'])
                         ?? ('Test ' . $testId);
+
+                    // Every test referenced by a panel counts as "seen" — even
+                    // the ones excluded/flagged later — so a transient catalog
+                    // error never deactivates a previously-imported row.
+                    $code = $this->testCode($providerId, $testId);
+                    $seenTestCodes[$code] = true;
 
                     $active = $activeTests[$testId] ?? null;
                     if ($active === null) {
@@ -203,6 +254,7 @@ class CatalogImportService
 
                     $classification = $this->classify($active);
                     $loinc = $this->pickStr($active, ['loinc', 'loinc_code', 'loincCode']);
+                    $sampleType = (string)($active['sample_type'] ?? '');
 
                     if ($classification['error']) {
                         $summary['excluded_by_error'][$testId] = [
@@ -219,11 +271,30 @@ class CatalogImportService
                         ];
                     }
 
+                    // Resolve the OpenELIS sample type NAME to a SNOMED-CT code
+                    // via the once-only translation table. Unmapped sample types
+                    // are registered in the table (NULL code) and reported so
+                    // they can be curated a single time for every test that
+                    // shares the specimen.
+                    $snomed = $sampleType !== '' ? $this->specimenSnomedFor($sampleType) : '';
+                    if ($sampleType !== '' && $snomed === '') {
+                        if (!isset($summary['specimen_unmapped'][$sampleType])) {
+                            $summary['specimen_unmapped'][$sampleType] = ['tests' => 0, 'example' => ''];
+                        }
+                        $summary['specimen_unmapped'][$sampleType]['tests']++;
+                        if ($summary['specimen_unmapped'][$sampleType]['example'] === '') {
+                            $summary['specimen_unmapped'][$sampleType]['example'] = $testName;
+                        }
+                    }
+
                     // Keep the mapping page's autosuggest mirror
                     // (mod_openelis_test_catalog) fresh with every confirmed
                     // import — never on a preview.
                     if (!$dryRun) {
-                        $this->mirrorUpsert($testId, $testName);
+                        $this->mirrorUpsert($testId, $testName, $sampleType);
+                        if ($sampleType !== '') {
+                            $this->ensureSpecimenType($sampleType);
+                        }
                     }
 
                     // Conflict: a human already mapped this (provider, test)
@@ -247,11 +318,27 @@ class CatalogImportService
                         continue;
                     }
 
-                    $code = $this->testCode($providerId, $testId);
-                    $this->upsertTest($code, $this->truncateName($testName), $loinc, $grpId, $providerId, $ordSeq, $dryRun)
-                        ? $summary['tests_created']++ : $summary['tests_updated']++;
+                    $ups = $this->upsertTest(
+                        $code,
+                        $this->displayName($testName, $providerName),
+                        $loinc,
+                        $grpId,
+                        $providerId,
+                        $ordSeq,
+                        $dryRun
+                    );
+                    if ($ups['created']) {
+                        $summary['tests_created']++;
+                    } else {
+                        $summary['tests_updated']++;
+                    }
+                    if ($ups['reactivated']) {
+                        $summary['reactivated_tests'][$code] = $this->displayName($testName, $providerName);
+                    }
 
                     // Mapping upsert (auto-generated => always overwrite auto rows).
+                    // The mapping's openemr_procedure_name keeps the CLEAN test
+                    // name (no ` · {Lab}` suffix): reports/results must not show it.
                     $inserted = $this->upsertMapping(
                         $code,
                         $this->truncateName($testName),
@@ -260,6 +347,7 @@ class CatalogImportService
                         $panelId,
                         $this->truncateName($panelName, 255),
                         $loinc,
+                        $snomed,
                         $providerId,
                         $dryRun
                     );
@@ -271,6 +359,18 @@ class CatalogImportService
                     $summary['tests_imported']++;
                 }
             }
+
+            // Deactivate module-owned rows of this provider that the catalog no
+            // longer references (never delete them). Runs AFTER the loop so the
+            // seen-sets are complete; faithful on dry-run (reads only).
+            $this->reconcileAbsent(
+                $providerId,
+                $seenPanelCodes,
+                $seenTestCodes,
+                !empty($emptyMembersPanels),
+                $dryRun,
+                $summary
+            );
 
             if ($started) {
                 sqlCommitTrans();
@@ -296,13 +396,17 @@ class CatalogImportService
      * (the AUTO_INCREMENT primary key), which is what other rows reference in
      * their `parent` column — NOT the procedure_code string.
      *
-     * @return array ['id' => int, 'created' => bool]
+     * @return array ['id' => int, 'created' => bool, 'reactivated' => bool]
+     *               'reactivated' = true when an existing row was activity=0 and
+     *               is being set back to activity=1 (logged by the caller).
      */
     private function upsertGroup(string $code, string $name, int $providerId, int $seq, bool $dryRun): array
     {
-        $id = $this->lookupProcedureTypeId($code);
+        $found = $this->lookupProcedureType($code);
+        $id = $found['id'] ?? 0;
 
         if ($id > 0) {
+            $reactivated = (int)($found['activity'] ?? 1) === 0;
             if (!$dryRun) {
                 sqlStatement(
                     "UPDATE procedure_type SET name = ?, parent = 0, lab_id = ?, activity = 1, seq = ?
@@ -310,7 +414,7 @@ class CatalogImportService
                     [$name, $providerId, $seq, $id]
                 );
             }
-            return ['id' => $id, 'created' => false];
+            return ['id' => $id, 'created' => false, 'reactivated' => $reactivated];
         }
 
         if (!$dryRun) {
@@ -319,23 +423,28 @@ class CatalogImportService
                  VALUES (0, ?, ?, ?, 'grp', 1, ?)",
                 [$name, $providerId, $code, $seq]
             );
-            $id = $this->lookupProcedureTypeId($code);
+            $found = $this->lookupProcedureType($code);
+            $id = $found['id'] ?? 0;
         }
 
-        return ['id' => $id > 0 ? $id : -1, 'created' => true];
+        return ['id' => $id > 0 ? $id : -1, 'created' => true, 'reactivated' => false];
     }
 
     /**
-     * Insert or update an orderable test under its panel grp.
+     * Insert or update an orderable test under its panel grp. A test that moved
+     * panels between syncs is re-hung under its NEW panel: the UPDATE always
+     * reassigns `parent`, so it can never be left orphaned while it exists.
      *
-     * @return bool  True if a new row was created, false if an existing row was updated.
+     * @return array ['created' => bool, 'reactivated' => bool]
      */
-    private function upsertTest(string $code, string $name, string $loinc, int $parentId, int $providerId, int $seq, bool $dryRun): bool
+    private function upsertTest(string $code, string $name, string $loinc, int $parentId, int $providerId, int $seq, bool $dryRun): array
     {
-        $id = $this->lookupProcedureTypeId($code);
+        $found = $this->lookupProcedureType($code);
+        $id = $found['id'] ?? 0;
         $standardCode = $loinc !== '' ? 'LOINC:' . $loinc : '';
 
         if ($id > 0) {
+            $reactivated = (int)($found['activity'] ?? 1) === 0;
             if (!$dryRun) {
                 sqlStatement(
                     "UPDATE procedure_type
@@ -344,7 +453,7 @@ class CatalogImportService
                     [$name, $parentId, $providerId, $standardCode, $seq, $id]
                 );
             }
-            return false;
+            return ['created' => false, 'reactivated' => $reactivated];
         }
 
         if (!$dryRun) {
@@ -354,7 +463,7 @@ class CatalogImportService
                 [$parentId, $name, $providerId, $code, $standardCode, $seq]
             );
         }
-        return true;
+        return ['created' => true, 'reactivated' => false];
     }
 
     /**
@@ -363,28 +472,170 @@ class CatalogImportService
      * test id. The REST payload exposes a single display name, so the same
      * value is stored in both language columns.
      */
-    private function mirrorUpsert(string $testId, string $displayName): void
+    private function mirrorUpsert(string $testId, string $displayName, string $sampleType = ''): void
     {
         $name = $this->truncateName($displayName, 255);
+        $sampleType = $this->truncateName($sampleType, 64);
         sqlStatement(
-            "INSERT INTO mod_openelis_test_catalog (openelis_test_id, name_es, name_en)
-             VALUES (?, ?, ?)
-             ON DUPLICATE KEY UPDATE name_es = VALUES(name_es), name_en = VALUES(name_en)",
-            [$testId, $name, $name]
+            "INSERT INTO mod_openelis_test_catalog (openelis_test_id, name_es, name_en, sample_type)
+             VALUES (?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE name_es = VALUES(name_es), name_en = VALUES(name_en),
+                 sample_type = VALUES(sample_type)",
+            [$testId, $name, $name, $sampleType]
         );
     }
 
     /**
-     * Find the procedure_type_id for a procedure_code, or 0 if it does not exist.
-     * procedure_code is our deterministic per-lab key, so the lookup is by it.
+     * Find the SNOMED-CT specimen code for an OpenELIS sample type NAME via the
+     * once-only translation table mod_openelis_specimen_map.
+     *
+     * @return string  The mapped snomed_code, or '' when the sample type is
+     *                 unknown / not yet curated.
      */
-    private function lookupProcedureTypeId(string $code): int
+    private function specimenSnomedFor(string $sampleType): string
+    {
+        $sampleType = trim($sampleType);
+        if ($sampleType === '') {
+            return '';
+        }
+        $row = sqlQuery(
+            "SELECT snomed_code FROM mod_openelis_specimen_map WHERE sample_type = ? LIMIT 1",
+            [$sampleType]
+        );
+        if (!$row || trim((string)($row['snomed_code'] ?? '')) === '') {
+            return '';
+        }
+        return trim((string)$row['snomed_code']);
+    }
+
+    /**
+     * Make sure an OpenELIS sample type NAME has a row in the translation table,
+     * so a missing SNOMED code is discoverable and can be curated once. Existing
+     * rows (including their curated snomed_code) are never touched.
+     */
+    private function ensureSpecimenType(string $sampleType): void
+    {
+        $sampleType = trim($sampleType);
+        if ($sampleType === '') {
+            return;
+        }
+        sqlStatement(
+            "INSERT INTO mod_openelis_specimen_map (sample_type)
+             VALUES (?)
+             ON DUPLICATE KEY UPDATE sample_type = sample_type",
+            [$sampleType]
+        );
+    }
+
+    /**
+     * Find the procedure_type row by procedure_code, or []
+     * procedure_code is our deterministic per-lab key, so the lookup is by it.
+     *
+     * @return array ['id' => int, 'activity' => int] or ['id' => 0, 'activity' => -1] when absent.
+     */
+    private function lookupProcedureType(string $code): array
     {
         $row = sqlQuery(
-            "SELECT procedure_type_id AS id FROM procedure_type WHERE procedure_code = ? LIMIT 1",
+            "SELECT procedure_type_id AS id, activity FROM procedure_type WHERE procedure_code = ? LIMIT 1",
             [$code]
         );
-        return $row ? (int)$row['id'] : 0;
+        return $row
+            ? ['id' => (int)$row['id'], 'activity' => (int)$row['activity']]
+            : ['id' => 0, 'activity' => -1];
+    }
+
+    /**
+     * Deactivate (never delete) module-owned procedure_type rows of this
+     * provider that this sync no longer references, and pull the affected auto
+     * mappings to is_active = 0 so the send flow and the mapping page stop
+     * offering them. Both transitions (deactivated + the reactivations already
+     * logged by upsertGroup/upsertTest) are reported in the summary.
+     *
+     * SAFETY GUARDS (transient API failures must never wipe a live tree):
+     *  - Only runs when the import actually saw panels AND tests: an empty or
+     *    failed catalog read deactivates nothing.
+     *  - When ANY panel returned an empty member list this run, the test pass is
+     *    skipped (a single flaky panel must not orphan-deactivate its tests);
+     *    the panel pass still applies because panels are a cheap single call.
+     *  - Dry-run: reports exactly what WOULD be deactivated, zero writes.
+     *
+     * @param array $summary  Passed by reference; populated with
+     *                        deactivated_panels / deactivated_tests [code => name].
+     */
+    private function reconcileAbsent(
+        int $providerId,
+        array $seenPanelCodes,
+        array $seenTestCodes,
+        bool $emptyMembersFound,
+        bool $dryRun,
+        array &$summary
+    ): void {
+        if (empty($seenPanelCodes) || empty($seenTestCodes)) {
+            return;
+        }
+        // The seen-sets are already [procedure_code => true] (the importer
+        // stamps them per panel/test as it walks the catalog).
+        $seenPanels = $seenPanelCodes;
+        $seenTests = $seenTestCodes;
+
+        $rs = sqlStatement(
+            "SELECT procedure_type_id, procedure_code, procedure_type, name, activity
+             FROM procedure_type
+             WHERE lab_id = ? AND (procedure_code LIKE ? OR procedure_code LIKE ?)",
+            [$providerId, 'OEP' . $providerId . '-%', 'OE' . $providerId . '-T%']
+        );
+        while ($row = sqlFetchArray($rs)) {
+            $code = trim((string)$row['procedure_code']);
+            $isPanel = (string)$row['procedure_type'] === 'grp';
+            if ((int)$row['activity'] !== 1) {
+                continue;
+            }
+            if ($isPanel ? isset($seenPanels[$code]) : isset($seenTests[$code])) {
+                continue;
+            }
+            if (!$isPanel && $emptyMembersFound) {
+                continue;
+            }
+
+            if (!$dryRun) {
+                sqlStatement(
+                    "UPDATE procedure_type SET activity = 0 WHERE procedure_type_id = ?",
+                    [(int)$row['procedure_type_id']]
+                );
+                if (!$isPanel) {
+                    sqlStatement(
+                        "UPDATE mod_openelis_code_mapping SET is_active = 0
+                         WHERE provider_id = ? AND openemr_procedure_code = ? AND import_source = 'catalog_import'",
+                        [$providerId, $code]
+                    );
+                }
+            }
+            $summary[$isPanel ? 'deactivated_panels' : 'deactivated_tests'][$code] = (string)$row['name'];
+        }
+    }
+
+    /**
+     * Build the display name stored on the procedure_type row: {name} · {Lab}.
+     * With several labs each pointing to its own OpenELIS, the suffix is what
+     * tells "Hematología Básica" apart in OpenEMR's native order picker. The
+     * mapping's openemr_procedure_name and the autosuggest mirror keep the
+     * clean name — reports/results must never render the suffix.
+     *
+     * The suffix reserves its own space (up to 24 chars of provider name), so
+     * even a very long test/panel name gets truncated in the middle and the
+     * " · {Lab}" tail ALWAYS survives — losing the lab name would defeat the
+     * feature. Everything still fits the varchar(63) column.
+     */
+    private function displayName(string $name, string $providerName): string
+    {
+        $provider = trim($providerName);
+        if ($provider === '') {
+            return $this->truncateName($name, self::PROCEDURE_TYPE_NAME_MAX);
+        }
+        $sep = ' · ';
+        $providerShort = $this->truncateName($provider, 24);
+        $maxBase = self::PROCEDURE_TYPE_NAME_MAX - $this->charLen($sep) - $this->charLen($providerShort);
+        return $this->truncateName($name, $maxBase) . $sep . $providerShort;
     }
 
     // ---------------------------------------------------------------------
@@ -432,6 +683,11 @@ class CatalogImportService
     /**
      * Insert or update an auto-generated mapping row.
      *
+     * @param string $snomed  SNOMED-CT specimen code resolved from the catalog
+     *                        sample type via mod_openelis_specimen_map; ''
+     *                        keeps the stored value on update (never wipes a
+     *                        previously-resolved code because a transient map
+     *                        miss).
      * @return bool  True if inserted, false if an existing row was updated.
      */
     private function upsertMapping(
@@ -442,18 +698,21 @@ class CatalogImportService
         string $panelId,
         string $panelName,
         string $loinc,
+        string $snomed,
         int $providerId,
         bool $dryRun
     ): bool {
         $existing = $this->findAutoMapping($providerId, $procedureCode);
+        $snomed = trim($snomed);
 
         if ($existing) {
             if (!$dryRun) {
                 sqlStatement(
                     "UPDATE mod_openelis_code_mapping
                      SET openemr_procedure_name = ?, openelis_test_id = ?, openelis_test_name = ?,
-                         openelis_panel_id = ?, openelis_panel_name = ?, loinc_code = ?, is_active = 1,
-                         import_source = 'catalog_import', imported_at = ?
+                         openelis_panel_id = ?, openelis_panel_name = ?, loinc_code = ?,
+                         snomed_specimen = CASE WHEN ? <> '' THEN ? ELSE snomed_specimen END,
+                         is_active = 1, import_source = 'catalog_import', imported_at = ?
                      WHERE id = ?",
                     [
                         $procedureName,
@@ -462,6 +721,8 @@ class CatalogImportService
                         $panelId,
                         $panelName,
                         $loinc !== '' ? $loinc : null,
+                        $snomed,
+                        $snomed,
                         date('Y-m-d H:i:s'),
                         (int)$existing['id'],
                     ]
@@ -474,8 +735,9 @@ class CatalogImportService
             sqlStatement(
                 "INSERT INTO mod_openelis_code_mapping
                     (openemr_procedure_code, openemr_procedure_name, openelis_test_id, openelis_test_name,
-                     openelis_panel_id, openelis_panel_name, loinc_code, is_active, import_source, imported_at, provider_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'catalog_import', ?, ?)",
+                     openelis_panel_id, openelis_panel_name, loinc_code, snomed_specimen,
+                     is_active, import_source, imported_at, provider_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'catalog_import', ?, ?)",
                 [
                     $procedureCode,
                     $procedureName,
@@ -484,6 +746,7 @@ class CatalogImportService
                     $panelId,
                     $panelName,
                     $loinc !== '' ? $loinc : null,
+                    $snomed !== '' ? $snomed : null,
                     date('Y-m-d H:i:s'),
                     $providerId,
                 ]
@@ -498,7 +761,7 @@ class CatalogImportService
 
     /**
      * Key the active-tests list by test id and normalize each entry to
-     * ['name', 'loinc', 'errorCount', 'findings'].
+     * ['name', 'loinc', 'sample_type', 'errorCount', 'findings'].
      */
     private function indexActiveTests(array $tests): array
     {
@@ -512,6 +775,10 @@ class CatalogImportService
                 'name' => $this->pick($t, ['test_name', 'testName', 'name', 'name_en', 'name_es'])
                     ?? ('Test ' . $testId),
                 'loinc' => (string)($this->pickStr($t, ['loinc', 'loinc_code', 'loincCode']) ?? ''),
+                'sample_type' => (string)(
+                    $this->pickStr($t, ['sampleType', 'sample_type', 'typeOfSample', 'type_of_sample', 'sample', 'specimen'])
+                    ?? ''
+                ),
                 'errorCount' => (int)($this->pick($t, ['errorCount', 'error_count', 'errors']) ?? 0),
                 'findings' => $t['findings'] ?? [],
             ];
@@ -604,6 +871,14 @@ class CatalogImportService
     private function panelCode(int $providerId, string $panelId): string
     {
         return 'OEP' . $providerId . '-' . $panelId;
+    }
+
+    /**
+     * Character length of a string (mb fallback for php -n / no mbstring).
+     */
+    private function charLen(string $s): int
+    {
+        return function_exists('mb_strlen') ? mb_strlen($s) : strlen($s);
     }
 
     /**

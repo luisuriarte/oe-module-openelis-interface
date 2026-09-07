@@ -130,10 +130,17 @@ if ($isAjax) {
 // native Procedure Providers edit form (see patches/procedure_provider_edit.php).
 $providers = [];
 $rsProviders = sqlStatement(
-    "SELECT ppid, name, protocol
-     FROM procedure_providers WHERE active = 1 ORDER BY name"
+    "SELECT pp.ppid, pp.name, pp.protocol, pp.remote_host, pp.mod_openelis_catalog_login,
+            (SELECT MAX(m.imported_at) FROM mod_openelis_code_mapping m
+              WHERE m.provider_id = pp.ppid AND m.import_source = 'catalog_import') AS last_import
+     FROM procedure_providers pp WHERE pp.active = 1 ORDER BY pp.name"
 );
 while ($row = sqlFetchArray($rsProviders)) {
+    // A provider is "catalog-ready" only when it can call its own OpenELIS
+    // test-catalog API (WS protocol + host + the ADMIN catalog login).
+    $row['catalog_ready'] = ($row['protocol'] ?? '') === 'WS'
+        && !empty($row['remote_host'])
+        && !empty($row['mod_openelis_catalog_login']);
     $providers[] = $row;
 }
 
@@ -157,6 +164,8 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
         .count-card .num { font-size: 1.6rem; font-weight: 600; }
         .import-list { max-height: 260px; overflow-y: auto; font-size: 0.85rem; }
         .import-list li { margin-bottom: 0.25rem; }
+        .provider-card { border-left: 4px solid #adb5bd; }
+        .provider-card.provider-ready { border-left-color: #198754; }
         #result { display: none; }
     </style>
 </head>
@@ -169,6 +178,45 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
         </div>
     </div>
     <div class="card-body">
+        <!-- Per-provider actions: each lab has its own OpenELIS to sync. -->
+        <div class="row g-2 mb-3" id="providers_list">
+            <?php foreach ($providers as $p): ?>
+                <div class="col-md-6">
+                    <div class="card provider-card h-100<?php echo $p['catalog_ready'] ? ' provider-ready' : ''; ?>">
+                        <div class="card-body py-2 d-flex align-items-center justify-content-between gap-2 flex-wrap">
+                            <div>
+                                <span class="fw-semibold"><?php echo text($p['name']); ?></span>
+                                <?php if (!empty($p['protocol'])): ?>
+                                    <span class="cfg-hint"> (<?php echo text($p['protocol']); ?>)</span>
+                                <?php endif; ?>
+                                <?php if ($p['catalog_ready']): ?>
+                                    <span class="badge text-bg-success ms-1"><?php echo xlt("Catalog ready"); ?></span>
+                                <?php else: ?>
+                                    <span class="badge text-bg-secondary ms-1"><?php echo xlt("Manual / no OpenELIS"); ?></span>
+                                <?php endif; ?>
+                                <div class="cfg-hint">
+                                    <?php echo xlt("Last import"); ?>:
+                                    <?php echo !empty($p['last_import']) ? text($p['last_import']) : xlt("Never"); ?>
+                                </div>
+                            </div>
+                            <div class="d-flex gap-2">
+                                <button type="button" id="btn_preview_<?php echo attr($p['ppid']); ?>"
+                                        class="btn btn-sm btn-outline-primary provider-action"
+                                        data-action="preview" data-provider="<?php echo attr($p['ppid']); ?>"<?php echo $p['catalog_ready'] ? '' : ' disabled'; ?>>
+                                    <?php echo xlt("Preview"); ?>
+                                </button>
+                                <button type="button" id="btn_import_<?php echo attr($p['ppid']); ?>"
+                                        class="btn btn-sm btn-success provider-action"
+                                        data-action="import" data-provider="<?php echo attr($p['ppid']); ?>"<?php echo $p['catalog_ready'] ? '' : ' disabled'; ?>>
+                                    <?php echo xlt("Update tests"); ?>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+        </div>
+
         <!-- Provider select -->
         <div class="row g-2 align-items-end mb-3">
             <div class="col-md-6">
@@ -229,7 +277,8 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
             ul.appendChild(li);
             return ul;
         }
-        for (const [id, info] of Object.entries(textos)) {
+        for (const [id, raw] of Object.entries(textos)) {
+            const info = (raw && typeof raw === 'object') ? raw : { name: String(raw == null ? id : raw) };
             const li = document.createElement('li');
             li.className = 'list-group-item';
             const cab = document.createElement('span');
@@ -284,6 +333,11 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
             ['Con advertencias', Object.keys(s.tests_with_warnings || {}).length],
             ['Inactivos/no encontrados', Object.keys(s.inactive_missing || {}).length],
             ['Conflictos con mapeos manuales', Object.keys(s.conflicts || {}).length],
+            ['Muestras sin SNOMED', Object.keys(s.specimen_unmapped || {}).length],
+            ['Paneles desactivados', Object.keys(s.deactivated_panels || {}).length],
+            ['Tests desactivados', Object.keys(s.deactivated_tests || {}).length],
+            ['Paneles reactivados', Object.keys(s.reactivated_panels || {}).length],
+            ['Tests reactivados', Object.keys(s.reactivated_tests || {}).length],
         ];
         for (const [label, value] of cards) {
             const col = document.createElement('div');
@@ -306,6 +360,23 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
             ['Con advertencias de catálogo', s.tests_with_warnings || {}, 'Sin tests con advertencias.'],
             ['Inactivos / no encontrados', s.inactive_missing || {}, 'Sin tests inactivos.'],
             ['Conflictos con mapeos manuales', s.conflicts || {}, 'Sin conflictos con mapeos manuales.'],
+            [
+                'Tipos de muestra sin código SNOMED',
+                Object.fromEntries(Object.entries(s.specimen_unmapped || {}).map(([st, v]) => [
+                    st,
+                    {
+                        name: st + ' (' + v.tests + (v.tests === 1 ? ' test' : ' tests') + ')',
+                        messages: v.example
+                            ? ['Ejemplo: ' + v.example + '. Completá el código SNOMED en mod_openelis_specimen_map y reimportá.']
+                            : [],
+                    },
+                ])),
+                'Todos los tipos de muestra tienen código SNOMED.',
+            ],
+            ['Paneles desactivados (ausentes del catálogo)', s.deactivated_panels || {}, 'Sin paneles desactivados.'],
+            ['Tests desactivados (ausentes del catálogo)', s.deactivated_tests || {}, 'Sin tests desactivados.'],
+            ['Paneles reactivados (volvieron al catálogo)', s.reactivated_panels || {}, 'Sin paneles reactivados.'],
+            ['Tests reactivados (volvieron al catálogo)', s.reactivated_tests || {}, 'Sin tests reactivados.'],
         ];
         for (const [titulo, data, vacio] of dets) {
             const card = document.createElement('div');
@@ -342,21 +413,23 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
         resultBox.appendChild(alert);
     }
 
-    function run(action) {
-        const pid = providerSelect.value;
-        if (!pid) {
+    function run(action, pid, btnEl) {
+        const providerId = pid != null ? String(pid) : providerSelect.value;
+        if (!providerId) {
             showError('Seleccioná un proveedor de laboratorio.');
             return;
         }
-        const btn = action === 'preview' ? btnPreview : btnImport;
-        btn.disabled = true;
-        const orig = btn.textContent;
-        btn.textContent = 'Espere…';
+        if (pid != null) { providerSelect.value = providerId; }
+        const isPreview = action === 'preview';
+        const btn = btnEl || (isPreview ? btnPreview : btnImport);
+        if (btn) { btn.disabled = true; }
+        const orig = btn ? btn.textContent : '';
+        if (btn) { btn.textContent = 'Espere…'; }
 
         const fd = new FormData();
         fd.append('csrf_token_form', CSRF_TOKEN);
         fd.append('action', action);
-        fd.append('provider_id', pid);
+        fd.append('provider_id', providerId);
 
         fetch(window.location.pathname, {
             method: 'POST',
@@ -366,18 +439,23 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
             .then(r => r.json().catch(() => ({ success: false, message: 'HTTP ' + r.status })))
             .then(res => {
                 if (res.success) {
-                    if (action === 'preview') { renderResult(res.summary); }
-                    else { renderResult(res.summary); btnImport.disabled = true; }
+                    renderResult(res.summary);
+                    if (action === 'import') { btnImport.disabled = true; }
                 } else {
                     showError(res.message || 'Error desconocido');
                 }
             })
             .catch(err => showError(String(err)))
-            .finally(() => { btn.disabled = false; btn.textContent = orig; });
+            .finally(() => { if (btn) { btn.disabled = false; btn.textContent = orig; } });
     }
 
-    btnPreview.addEventListener('click', () => run('preview'));
-    btnImport.addEventListener('click', () => run('import'));
+    btnPreview.addEventListener('click', () => run('preview', null));
+    btnImport.addEventListener('click', () => run('import', null));
+
+    // Per-provider buttons: sync a single lab's own OpenELIS catalog.
+    document.querySelectorAll('.provider-action').forEach(btn => {
+        btn.addEventListener('click', () => run(btn.dataset.action, btn.dataset.provider, btn));
+    });
 </script>
 </body>
 </html>

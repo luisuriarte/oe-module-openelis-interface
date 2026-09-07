@@ -265,20 +265,73 @@ Providers form, see `patches/procedure_provider_edit.php`) and:
    without splitting words; uniqueness depends **only** on `procedure_code`.
 4. Generates one `mod_openelis_code_mapping` row per imported test with
    `import_source = 'catalog_import'` and the LOINC code when available.
+5. Extracts the **sample type** (`sampleType`) the REST payload carries per test
+   and resolves it against the once-only translation table
+   `mod_openelis_specimen_map` (below). The resolved SNOMED code is written to
+   the mapping's `snomed_specimen` automatically. Sample types with no code yet
+   are registered in the table (with `snomed_code = NULL`) and reported in the
+   import summary under **"Sample types without SNOMED"** so they can be curated
+   a single time.
+6. **Provider suffix in the visible name**: every imported `grp`/`ord` row is
+   shown as `{Name} · {Lab}` (e.g. `Hemograma · Laboratorio Central`). Because
+   each provider points at a **different OpenELIS**, the suffix makes the same
+   analysis ordered from different labs distinguishable in OpenEMR's native
+   procedure picker. The mapping's `openemr_procedure_name` and the autosuggest
+   mirror keep the **clean name** (reports/results never render the suffix).
+7. **Reconciliation (deactivate, never delete)**: on sync, provider-owned rows
+   (`OE{p}-T*` ords and `OEP{p}-*` grps) that the catalog no longer references
+   go to `activity = 0` and their auto mapping drops to `is_active = 0`. If a
+   test/panel comes back it is reactivated automatically (`activity = 1`, active
+   mapping). Both transitions (deactivation and reactivation) are **reported in
+   the summary** — nothing happens silently. A test that **moves panels** is
+   re-hung automatically under its new panel (`parent` is reassigned every sync;
+   it can never be orphaned while it exists). Safeguards: reconciliation only
+   runs when the read actually saw panels **and** tests; if any panel returned an
+   empty member list (possible transient failure) the test-deactivation pass is
+   skipped. A transient catalog error never deactivates pre-existing rows.
 
-The page supports a **dry-run preview** (no writes) and a separate **confirm**
-action, both via AJAX. The whole import for **one provider** runs inside a single
-transaction. `admin_mapping.php` remains the manual fine-tuning path and coexists
-(its rows default to `provider_id = 0`, `import_source = 'manual'`).
+### 🧬 `mod_openelis_specimen_map` — sample type → SNOMED (once only)
+
+OpenELIS exposes each test's sample type **by name only** (e.g. `Whole Blood`,
+`Serum`) — it never provides the SNOMED code. To avoid typing SNOMED per test,
+this small table translates the *name* to the SNOMED-CT concept and the importer
+applies it to every test automatically:
+
+| Column | Description |
+|--------|-------------|
+| `sample_type` | Sample type name exactly as the catalog returns it |
+| `snomed_code` | SNOMED-CT specimen concept (e.g. `119297000` = blood specimen). `NULL` = not curated yet |
+
+Seeded with the common standard concepts (`Whole Blood` → `119297000`,
+`Serum` → `119364003`, `Plasma` → `119361006`, `Urine` → `122575006`); adjust/add
+rows to match your catalog's real sample types. OpenEMR's installed SNOMED
+(`codes` + `code_types`, `ct_key` `SNOMED-CT`/`SNOMED`) is useful to **validate
+and describe** any code you add (it does not translate names automatically — the
+name→concept relation is semantic and is curated once here).
+
+The page provides, **per provider**, a **Preview** (dry-run, no writes) and an
+**Update tests** button that syncs that lab's own OpenELIS catalog, in addition to
+the classic selector/confirm flow. A provider without catalog credentials (e.g. a
+manual LAB01) is shown with the **"Manual / no OpenELIS"** badge and no buttons.
+The whole import for **one provider** runs inside a single transaction.
+`admin_mapping.php` remains the manual fine-tuning path and coexists (its rows
+default to `provider_id = 0`, `import_source = 'manual'`).
 
 ### 🔧 Admin Interface
 
 Access via **Lab → OpenELIS → Code Mapping** (requires `admin/super` ACL).
 
 Features:
-- 📋 List all active OpenEMR procedures (`procedure_type = 'ord'`)
+- 📋 List all active OpenEMR procedures (`procedure_type = 'ord'`), excluding
+  **imaging** studies (via `order_type_name`/`procedure_type_name`)
 - 🔍 Search by name, code, or standard (CPT4, SNOMED, LOINC)
-- ➕ Assign new mappings with inline forms
+- ➕ Assign new mappings with a **searchable picker** over the local mirror
+  `mod_openelis_test_catalog`: type a name or ID, click a match, and the OpenELIS
+  test ID + name are filled in
+- ⚡ Auto-fill: the **LOINC** field is pre-suggested from
+  `procedure_type.standard_code` (regex `LOINC:xxxx`), and picking a test whose
+  sample type is known auto-completes **SNOMED specimen** from
+  `mod_openelis_specimen_map` (when empty)
 - ✏️ Edit existing mappings
 - 🔄 Toggle active/inactive status
 - 📄 Paginated results (20 per page)
@@ -418,11 +471,13 @@ user/password, not database credentials):
 
 - The local mirror table `mod_openelis_test_catalog` is kept fresh by the
   catalog import (`public/catalog_import.php` / `CatalogImportService`), which
-  upserts every imported test by its OpenELIS id.
+  upserts every imported test by its OpenELIS id (including `sample_type` when
+  the API provides it).
 - The mapping page (`public/admin_mapping.php`) reads that local mirror to
   autosuggest the OpenELIS test id/name when assigning a mapping — no per-keystroke
   API calls.
-- LOINC is not provided by this endpoint, so it is optional / entered manually.
+- LOINC is not provided by this endpoint, so it is optional / entered manually
+  (or pre-suggested from `procedure_type.standard_code` in the mapping form).
 - The prior design (reading OpenELIS's `clinlims.*` PostgreSQL tables directly)
   was abandoned because the lab does not share database credentials.
 

@@ -271,11 +271,11 @@ class OpenElisCatalog
      *
      * @param string|null $search
      * @param int         $limit
-     * @return array  Rows: openelis_test_id, name_es, name_en
+     * @return array  Rows: openelis_test_id, name_es, name_en, sample_type
      */
     public function searchTests(?string $search = null, int $limit = 200): array
     {
-        $sql = "SELECT openelis_test_id, name_es, name_en
+        $sql = "SELECT openelis_test_id, name_es, name_en, sample_type
                 FROM mod_openelis_test_catalog";
         $params = [];
         if ($search !== null && $search !== '') {

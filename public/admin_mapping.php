@@ -106,6 +106,38 @@ try {
     error_log("OpenELIS catalog autosuggest unavailable: " . $e->getMessage());
 }
 
+// JSON payload for the picker: every mirror test (id + display name + sample
+// type name) plus the specimen-name -> SNOMED code map, so selecting a test
+// can auto-fill its SNOMED specimen code with zero extra round-trips.
+$catalogJs = [];
+foreach ($catalogRows as $cat) {
+    $catalogJs[] = [
+        'i' => (string)$cat['openelis_test_id'],
+        'n' => ($cat['name_es'] ?? '') !== '' ? (string)$cat['name_es'] : (string)($cat['name_en'] ?? ''),
+        's' => (string)($cat['sample_type'] ?? ''),
+    ];
+}
+$specimenMapJs = [];
+$rsSpec = sqlStatement("SELECT sample_type, snomed_code FROM mod_openelis_specimen_map WHERE snomed_code IS NOT NULL AND snomed_code <> ''");
+while ($rowSpec = sqlFetchArray($rsSpec)) {
+    $specimenMapJs[strtolower(trim((string)$rowSpec['sample_type']))] = (string)$rowSpec['snomed_code'];
+}
+
+/**
+ * Best-effort LOINC code pulled out of a procedure_type.standard_code value
+ * (e.g. "LOINC:2345-7") to prefill the mapping form, or '' when absent.
+ */
+function oe_loinc_from_standard(?string $standardCode): string
+{
+    if ($standardCode === null || $standardCode === '') {
+        return '';
+    }
+    if (preg_match('/(?:LOINC)\s*:\s*([0-9][0-9.\-]*)/i', $standardCode, $m)) {
+        return $m[1];
+    }
+    return '';
+}
+
 $perPage = 20;
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $page_unmapped = max(1, (int)($_GET['page_unmapped'] ?? 1));
@@ -178,11 +210,28 @@ if ($search !== '') {
     $paramsExtra = [$like, $like, $like];
 }
 
+// Exclude imaging from the mapping lists: only lab procedures (ordre)
+// get mapped, never imaging studies. The type-name column differs across
+// OpenEMR builds (procedure_type_name in stock 8.2.0, order_type_name in
+// some forks) so we detect it at runtime via INFORMATION_SCHEMA.
+$imagingFilter = '';
+$rsCols = sqlStatement(
+    "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'procedure_type'
+       AND COLUMN_NAME IN ('order_type_name', 'procedure_type_name')"
+);
+while ($rowCol = sqlFetchArray($rsCols)) {
+    $imagingFilter = " AND (pt." . $rowCol['COLUMN_NAME'] . " IS NULL
+        OR pt." . $rowCol['COLUMN_NAME'] . " = ''
+        OR pt." . $rowCol['COLUMN_NAME'] . " NOT LIKE '%imaging%')";
+    break;
+}
+
 // ── Pagination counts ───────────────────────────────────────────────────
 
 $countBase = "FROM procedure_type pt
     LEFT JOIN mod_openelis_code_mapping m ON pt.procedure_code = m.openemr_procedure_code
-    WHERE pt.activity = 1 AND pt.procedure_type = 'ord'" . $whereExtra;
+    WHERE pt.activity = 1 AND pt.procedure_type = 'ord'" . $imagingFilter . $whereExtra;
 
 $countUnmapped = sqlQuery(
     "SELECT COUNT(*) AS total " . $countBase . " AND m.id IS NULL",
@@ -205,7 +254,7 @@ $rsUnmapped = sqlStatement(
     "SELECT pt.procedure_code, pt.name, pt.standard_code
     FROM procedure_type pt
     LEFT JOIN mod_openelis_code_mapping m ON pt.procedure_code = m.openemr_procedure_code
-    WHERE pt.activity = 1 AND pt.procedure_type = 'ord' AND m.id IS NULL" . $whereExtra . "
+    WHERE pt.activity = 1 AND pt.procedure_type = 'ord' AND m.id IS NULL" . $imagingFilter . $whereExtra . "
     ORDER BY pt.name
     LIMIT ? OFFSET ?",
     array_merge($paramsExtra, [$perPage, $offsetUnmapped])
@@ -225,7 +274,7 @@ $rsMapped = sqlStatement(
             m.loinc_code, m.snomed_specimen, m.snomed_finding, m.units, m.is_active
     FROM procedure_type pt
     INNER JOIN mod_openelis_code_mapping m ON pt.procedure_code = m.openemr_procedure_code
-    WHERE pt.activity = 1 AND pt.procedure_type = 'ord'" . $whereExtra . "
+    WHERE pt.activity = 1 AND pt.procedure_type = 'ord'" . $imagingFilter . $whereExtra . "
     ORDER BY pt.name
     LIMIT ? OFFSET ?",
     array_merge($paramsExtra, [$perPage, $offsetMapped])
@@ -255,6 +304,22 @@ $webRoot = $GLOBALS['webroot'] ?? '';
         .standard-code { font-size: 0.85em; color: #6c757d; }
         .code-badge { font-size: 0.78em; padding: 2px 6px; }
         .btn-code-finder { border-start-width: 0; }
+        .oe-picker-wrap { position: relative; }
+        .oe-picker-drop {
+            display: none; position: absolute; z-index: 1060; top: 100%; left: 0;
+            min-width: 320px; max-width: 340px; max-height: 220px; overflow-y: auto;
+            margin: 0; padding: 0.25rem 0; list-style: none; background: #fff;
+            border: 1px solid #ced4da; border-radius: 0.25rem;
+            box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+        }
+        .oe-picker-drop.show { display: block; }
+        .oe-picker-item {
+            padding: 0.35rem 0.75rem; cursor: pointer; display: block;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .oe-picker-item:hover { background: #e9ecef; }
+        .oe-picker-item .oe-sm { color: #6c757d; font-size: 0.85em; }
+        .oe-picker-caption { min-height: 1.25em; font-size: 0.8rem; }
     </style>
 </head>
 <body class="container-fluid">
@@ -340,21 +405,23 @@ $webRoot = $GLOBALS['webroot'] ?? '';
                                     <input type="hidden" name="procedure_code" value="<?php echo attr($row['procedure_code']); ?>">
                                     <input type="hidden" name="procedure_name" value="<?php echo attr($row['name']); ?>">
                                     <div class="row g-2 align-items-end">
-                                        <div class="col-auto">
-                                            <label class="form-label small"><?php echo xlt("OpenELIS Test ID"); ?></label>
-                                            <input type="text" class="form-control form-control-sm openelis-test-id" name="openelis_test_id"
-                                                   list="openelis-catalog" required
-                                                   placeholder="<?php echo attr("e.g., 42"); ?>">
-                                        </div>
-                                        <div class="col-auto">
-                                            <label class="form-label small"><?php echo xlt("OpenELIS Test Name"); ?></label>
-                                            <input type="text" class="form-control form-control-sm openelis-test-name" name="openelis_test_name"
-                                                   placeholder="<?php echo attr("e.g., Glucose"); ?>">
+                                        <div class="col-md-3 col-xl-2">
+                                            <label class="form-label small"><?php echo xlt("OpenELIS Test"); ?></label>
+                                            <div class="oe-picker-wrap">
+                                                <input type="text" class="form-control form-control-sm oe-picker-input"
+                                                       autocomplete="off" required
+                                                       placeholder="<?php echo attr("Search name or id..."); ?>">
+                                                <ul class="oe-picker-drop"></ul>
+                                            </div>
+                                            <input type="hidden" class="oe-picker-id" name="openelis_test_id" value="">
+                                            <input type="hidden" class="oe-picker-name" name="openelis_test_name" value="">
+                                            <div class="oe-picker-caption text-muted"></div>
                                         </div>
                                         <div class="col-auto">
                                             <label class="form-label small"><?php echo xlt("LOINC Code"); ?></label>
                                             <div class="input-group input-group-sm">
                                                 <input type="text" class="form-control" name="loinc_code" id="loinc-<?php echo attr($row['procedure_code']); ?>"
+                                                       value="<?php echo attr(oe_loinc_from_standard($row['standard_code'] ?? null)); ?>"
                                                        placeholder="<?php echo attr("e.g., 2345-7"); ?>">
                                                 <button type="button" class="btn btn-outline-secondary btn-code-finder"
                                                         onclick="openCodeFinder('LOINC', 'loinc-<?php echo attr($row['procedure_code']); ?>')"
@@ -481,16 +548,17 @@ $webRoot = $GLOBALS['webroot'] ?? '';
                                     <input type="hidden" name="procedure_code" value="<?php echo attr($row['procedure_code']); ?>">
                                     <input type="hidden" name="procedure_name" value="<?php echo attr($row['name']); ?>">
                                     <div class="row g-2 align-items-end">
-                                        <div class="col-auto">
-                                            <label class="form-label small"><?php echo xlt("OpenELIS Test ID"); ?></label>
-                                            <input type="text" class="form-control form-control-sm openelis-test-id" name="openelis_test_id"
-                                                   list="openelis-catalog" required
-                                                   value="<?php echo attr($row['openelis_test_id']); ?>">
-                                        </div>
-                                        <div class="col-auto">
-                                            <label class="form-label small"><?php echo xlt("OpenELIS Test Name"); ?></label>
-                                            <input type="text" class="form-control form-control-sm openelis-test-name" name="openelis_test_name"
-                                                   value="<?php echo attr($row['openelis_test_name'] ?? ''); ?>">
+                                        <div class="col-md-3 col-xl-2">
+                                            <label class="form-label small"><?php echo xlt("OpenELIS Test"); ?></label>
+                                            <div class="oe-picker-wrap">
+                                                <input type="text" class="form-control form-control-sm oe-picker-input"
+                                                       autocomplete="off" required
+                                                       value="<?php echo attr(trim(($row['openelis_test_id'] ?? '') . ' — ' . ($row['openelis_test_name'] ?? ''), ' —')); ?>">
+                                                <ul class="oe-picker-drop"></ul>
+                                            </div>
+                                            <input type="hidden" class="oe-picker-id" name="openelis_test_id" value="<?php echo attr($row['openelis_test_id']); ?>">
+                                            <input type="hidden" class="oe-picker-name" name="openelis_test_name" value="<?php echo attr($row['openelis_test_name'] ?? ''); ?>">
+                                            <div class="oe-picker-caption text-muted"></div>
                                         </div>
                                         <div class="col-auto">
                                             <label class="form-label small"><?php echo xlt("LOINC Code"); ?></label>
@@ -550,16 +618,7 @@ $webRoot = $GLOBALS['webroot'] ?? '';
         <?php endif; ?>
     </div>
 
-    <!-- ── Catalog autosuggest datalist ──────────────────────────────── -->
-    <?php if ($catalogCount > 0): ?>
-    <datalist id="openelis-catalog">
-        <?php foreach ($catalogRows as $cat): ?>
-            <option value="<?php echo attr($cat['openelis_test_id']); ?>"
-                    data-test-name="<?php echo attr($cat['name_es'] ?: $cat['name_en']); ?>"></option>
-        <?php endforeach; ?>
-    </datalist>
-    <?php endif; ?>
-
+    <!-- ── Catalog empty warning ─────────────────────────────────────── -->
     <?php if ($catalogCount === 0): ?>
         <div class="alert alert-warning">
             <?php echo xlt("The OpenELIS test catalog is empty. Import it first via"); ?>
@@ -568,6 +627,13 @@ $webRoot = $GLOBALS['webroot'] ?? '';
     <?php endif; ?>
 
 <script>
+// The local mirror + the once-only specimen-name -> SNOMED code map, embedded
+// so the picker needs no extra requests. OE_SPECIMEN keys are lowercased.
+var OE_CATALOG = <?php echo json_encode($catalogJs); ?>;
+var OE_SPECIMEN = <?php echo json_encode($specimenMapJs); ?>;
+var OE_CATALOG_BY_ID = {};
+OE_CATALOG.forEach(function (c) { OE_CATALOG_BY_ID[c.i] = c; });
+
 function toggleRow(id) {
     var el = document.getElementById(id);
     if (el) {
@@ -575,33 +641,162 @@ function toggleRow(id) {
     }
 }
 
-// ── OpenELIS test catalog autosuggestion ────────────────────────────────
-// When the user picks (or types) an OpenELIS test id from the datalist,
-// auto-fill the sibling OpenELIS test name field in the same form row.
-document.addEventListener('change', function (e) {
-    var idInput = e.target.closest('.openelis-test-id');
-    if (!idInput) {
-        return;
+// ── OpenELIS test picker ────────────────────────────────────────────────────
+function oeFilterCat(q) {
+    q = (q || '').trim().toLowerCase();
+    if (q === '') {
+        return OE_CATALOG.slice(0, 30);
     }
-    var datalist = document.getElementById('openelis-catalog');
-    if (!datalist) {
-        return;
-    }
-    var picked = null;
-    var opts = datalist.options;
-    for (var i = 0; i < opts.length; i++) {
-        if (opts[i].value === idInput.value) {
-            picked = opts[i].getAttribute('data-test-name');
-            break;
+    var out = [];
+    var nQuery = q.replace(/[^0-9]/g, '');
+    for (var i = 0; i < OE_CATALOG.length; i++) {
+        var c = OE_CATALOG[i];
+        var idMatch = c.i.indexOf(q) === 0 || (nQuery !== '' && c.i.indexOf(nQuery) === 0);
+        var nameMatch = c.n.toLowerCase().indexOf(q) !== -1;
+        if (idMatch || nameMatch) {
+            out.push(c);
+            if (out.length >= 30) {
+                break;
+            }
         }
     }
-    if (picked) {
-        var row = idInput.closest('form');
-        var nameInput = row ? row.querySelector('.openelis-test-name') : null;
-        if (nameInput && nameInput.value === '') {
-            nameInput.value = picked;
+    return out;
+}
+
+function oeSpecimenSnomed(sampleType) {
+    if (!sampleType) {
+        return '';
+    }
+    return OE_SPECIMEN[sampleType.trim().toLowerCase()] || '';
+}
+
+function oeRenderDrop(input, matches) {
+    var wrap = input.closest('.oe-picker-wrap');
+    if (!wrap) {
+        return;
+    }
+    var drop = wrap.querySelector('.oe-picker-drop');
+    drop.innerHTML = '';
+    if (matches.length === 0) {
+        drop.classList.remove('show');
+        return;
+    }
+    matches.forEach(function (c) {
+        var li = document.createElement('li');
+        li.className = 'oe-picker-item';
+        li.textContent = c.i + ' — ' + c.n;
+        if (c.s) {
+            var sm = document.createElement('span');
+            sm.className = 'oe-sm';
+            sm.textContent = ' · ' + c.s;
+            li.appendChild(sm);
+        }
+        li._oeItem = c;
+        li.addEventListener('mousedown', function (ev) {
+            ev.preventDefault();
+            oePick(input, c);
+        });
+        drop.appendChild(li);
+    });
+    drop.classList.add('show');
+}
+
+function oeCloseAllDrops() {
+    var drops = document.querySelectorAll('.oe-picker-drop.show');
+    drops.forEach(function (d) { d.classList.remove('show'); });
+}
+
+function oePick(input, c) {
+    var wrap = input.closest('.oe-picker-wrap');
+    var row = input.closest('form');
+    input.value = c.i + ' — ' + c.n;
+    wrap.querySelector('.oe-picker-id').value = c.i;
+    wrap.querySelector('.oe-picker-name').value = c.n;
+    var cap = wrap.querySelector('.oe-picker-caption');
+    cap.innerHTML = (c.s ? (c.s + ' · ') : '') + c.n;
+    // Auto-fill the SNOMED specimen from the picker's sample type when empty.
+    var sn = row ? row.querySelector('[name="snomed_specimen"]') : null;
+    if (sn && sn.value.trim() === '') {
+        var code = oeSpecimenSnomed(c.s);
+        if (code) {
+            sn.value = code;
         }
     }
+    oeCloseAllDrops();
+}
+
+document.addEventListener('input', function (e) {
+    var input = e.target.closest('.oe-picker-input');
+    if (!input) {
+        return;
+    }
+    oeRenderDrop(input, oeFilterCat(input.value));
+    // A directly-typed, exact catalog id still maps itself (no pick needed).
+    var viaId = OE_CATALOG_BY_ID[input.value.trim()];
+    if (viaId) {
+        var wrap = input.closest('.oe-picker-wrap');
+        wrap.querySelector('.oe-picker-id').value = viaId.i;
+        wrap.querySelector('.oe-picker-name').value = viaId.n;
+    }
+});
+
+document.addEventListener('keydown', function (e) {
+    var wrap = e.target.closest('.oe-picker-wrap');
+    if (!wrap) {
+        return;
+    }
+    var drop = wrap.querySelector('.oe-picker-drop');
+    if (!drop || !drop.classList.contains('show')) {
+        return;
+    }
+    if (e.key === 'Enter' && drop.children.length > 0 && drop.children[0]._oeItem) {
+        e.preventDefault();
+        oePick(e.target, drop.children[0]._oeItem);
+    } else if (e.key === 'Escape') {
+        oeCloseAllDrops();
+    }
+});
+
+document.addEventListener('click', function (e) {
+    if (!e.target.closest('.oe-picker-wrap')) {
+        oeCloseAllDrops();
+    }
+});
+
+document.addEventListener('submit', function (e) {
+    var wrap = e.target.querySelector('.oe-picker-wrap');
+    if (!wrap) {
+        return;
+    }
+    var idH = wrap.querySelector('.oe-picker-id');
+    var text = wrap.querySelector('.oe-picker-input').value.trim();
+    if (!idH.value.trim() && text !== '') {
+        // No catalog match picked — save the raw typed value as the test id.
+        idH.value = text;
+    }
+});
+
+// Prefill captions for already-mapped rows.
+document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('.oe-picker-wrap').forEach(function (wrap) {
+        var idH = wrap.querySelector('.oe-picker-id');
+        if (!idH || !idH.value) {
+            return;
+        }
+        var c = OE_CATALOG_BY_ID[idH.value] || null;
+        var cap = wrap.querySelector('.oe-picker-caption');
+        if (!cap) {
+            return;
+        }
+        if (c) {
+            cap.innerHTML = (c.s ? (c.s + ' · ') : '') + c.n;
+        } else {
+            var nameH = wrap.querySelector('.oe-picker-name');
+            if (nameH && nameH.value) {
+                cap.innerHTML = nameH.value;
+            }
+        }
+    });
 });
 
 // ── Native OpenEMR Code Finder integration ──────────────────────────────

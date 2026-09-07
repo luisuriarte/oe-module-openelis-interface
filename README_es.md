@@ -268,21 +268,76 @@ de proveedores, ver `patches/procedure_provider_edit.php`) y:
    `procedure_code`.
 4. Genera una fila `mod_openelis_code_mapping` por prueba importada con
    `import_source = 'catalog_import'` y el LOINC cuando existe.
+5. Extrae el **tipo de muestra** (`sampleType`) que trae el payload REST por
+   prueba y lo resuelve contra la tabla de traducción única
+   `mod_openelis_specimen_map` (ver abajo). El código SNOMED resuelto se guarda
+   en `snomed_specimen` del mapeo automáticamente. Los tipos de muestra sin
+   código se registran en la tabla (con `snomed_code = NULL`) y se reportan en
+   el resumen del import bajo **"Muestras sin SNOMED"** para completarlos una
+   sola vez.
+6. **Sufijo de proveedor en el nombre visible**: cada fila `grp`/`ord` importada
+   muestra `{Nombre} · {Laboratorio}` (ej. `Hemograma · Laboratorio Central`).
+   Como cada proveedor apunta a un **OpenELIS distinto**, el sufijo hace
+   distinguibles en el selector nativo de órdenes de OpenEMR el mismo análisis
+   pedido a distintos laboratorios. El `openemr_procedure_name` del mapeo y el
+   espejo `mod_openelis_test_catalog` guardan el **nombre limpio** (los
+   reportes/resultados nunca muestran el sufijo).
+7. **Reconciliación (desactivar sin borrar)**: al sincronizar, las filas
+   propias del proveedor (`OE{p}-T*` y `OEP{p}-*`) que el catálogo ya **no**
+   referencia pasan a `activity = 0` (nunca se borran) y su mapeo auto baja a
+   `is_active = 0`. Si una prueba/panel vuelve a aparecer, se reactiva
+   automáticamente (`activity = 1`, mapeo activo). Ambas transiciones
+   (desactivación y reactivación) se **reportan en el resumen**, nada silencioso.
+   Un test que **cambia de panel** se vuelve a colgar automáticamente bajo el
+   panel nuevo (el `parent` se reasigna en cada sync; jamás queda huérfano sin
+   existir). Salvaguardas: la reconciliación solo corre si la lectura vio paneles
+   **y** pruebas; si algún panel devolvió miembros vacíos (posible fallo
+   transitorio) se omite la pasada de desactivación de pruebas. Un error de
+   catálogo transitorio **no** desactiva rows preexistentes.
 
-La página ofrece una **vista previa** (dry-run, sin escrituras) y una acción
-**confirmar** separada, ambas por AJAX. La importación de **un proveedor**
-corre dentro de una única transacción. `admin_mapping.php` sigue siendo la vía
-de ajuste fino manual y convive (sus filas quedan con `provider_id = 0`,
-`import_source = 'manual'`).
+### 🧬 `mod_openelis_specimen_map` — tipo de muestra → SNOMED (una sola vez)
+
+OpenELIS expone el tipo de muestra de cada prueba **solo por nombre** (p. ej.
+`Whole Blood`, `Serum`) — jamás entrega el código SNOMED. Para evitar escribir
+SNOMED prueba por prueba, esta tabla pequeña traduce el *nombre* al concepto
+SNOMED-CT y el importador la aplica automáticamente a cada test:
+
+| Columna | Descripción |
+|---------|-------------|
+| `sample_type` | Nombre del tipo de muestra tal como lo devuelve el catálogo |
+| `snomed_code` | Código SNOMED-CT del espécimen (ej. `119297000` = sangre). `NULL` = sin mapear aún |
+
+Se siembra con los conceptos estándar más comunes (`Whole Blood` →
+`119297000`, `Serum` → `119364003`, `Plasma` → `119361006`, `Urine` →
+`122575006`); ajuste/agregue filas según los tipos reales de su catálogo. El
+SNOMED instalado en OpenEMR (`codes` + `code_types`, `ct_key` `SNOMED-CT`/`SNOMED`)
+sirve para **validar y describir** cualquier código que agregue (no traduce
+nombres automáticamente: la relación nombre→concepto es semántica y se cura una
+vez aquí).
+
+La página ofrece, **por cada proveedor**, un botón **"Vista previa"** (dry-run, sin
+escrituras) y un botón **"Actualizar tests"** que sincroniza el catálogo de ese
+OpenELIS, además del selector/confirmación clásico. Un proveedor sin credenciales
+de catálogo (p. ej. el LAB01 manual) se muestra con la etiqueta **"Manual / sin
+OpenELIS"** y sin botones. La importación de **un proveedor** corre dentro de una
+única transacción. `admin_mapping.php` sigue siendo la vía de ajuste fino manual y
+convive (sus filas quedan con `provider_id = 0`, `import_source = 'manual'`).
 
 ### 🔧 Interfaz de administración
 
 Acceder vía **Laboratorio → OpenELIS → Mapeo de Códigos** (requiere ACL `admin/super`).
 
 Características:
-- 📋 Lista todos los procedimientos activos de OpenEMR (`procedure_type = 'ord'`)
+- 📋 Lista todos los procedimientos activos de OpenEMR (`procedure_type = 'ord'`),
+  excluyendo estudios de **imagen** (por `order_type_name`/`procedure_type_name`)
 - 🔍 Búsqueda por nombre, código o estándar (CPT4, SNOMED, LOINC)
-- ➕ Asignar nuevos mapeos con formularios inline
+- ➕ Asignar nuevos mapeos con un **selector con búsqueda** (picker) sobre el
+  espejo local `mod_openelis_test_catalog`: buscar por nombre o ID y, con un
+  clic, se rellenan el ID y el nombre del test de OpenELIS
+- ⚡ Auto-relleno: el campo **LOINC** se pre-sugiere desde
+  `procedure_type.standard_code` (regex `LOINC:xxxx`), y al elegir un test con
+  tipo de muestra conocido el campo **SNOMED muestreo** se completa solo desde
+  `mod_openelis_specimen_map` (si está vacío)
 - ✏️ Editar mapeos existentes
 - 🔄 Alternar estado activo/inactivo
 - 📄 Resultados paginados (20 por página)
@@ -423,11 +478,13 @@ solo un usuario/clave de API, no credenciales de base de datos):
 
 - La tabla espejo local `mod_openelis_test_catalog` se mantiene fresca con la
   importación de catálogo (`public/catalog_import.php` / `CatalogImportService`),
-  que hace upsert de cada prueba importada por su id de OpenELIS.
+  que hace upsert de cada prueba importada por su id de OpenELIS (incluye el
+  `sample_type` cuando la API lo entrega).
 - La página de mapeo (`public/admin_mapping.php`) lee ese espejo local para
   autosugerir el id/nombre de prueba de OpenELIS al asignar un mapeo — sin llamadas
   a la API por cada tecla.
-- El LOINC no lo entrega este endpoint, por lo que es opcional / se ingresa a mano.
+- El LOINC no lo entrega este endpoint, por lo que es opcional / se ingresa a mano
+  (o se pre-sugiere desde `procedure_type.standard_code` en el formulario de mapeo).
 - El diseño previo (leer las tablas `clinlims.*` de PostgreSQL de OpenELIS
   directamente) se descartó porque el laboratorio no comparte credenciales de BD.
 

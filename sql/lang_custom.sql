@@ -160,6 +160,11 @@ INSERT IGNORE INTO `lang_custom` (`lang_description`, `lang_code`, `constant_nam
 ('Spanish (Latin American)', 'el', 'This second credential set is used by the module\'s bulk catalog import (catalog_import.php). Assign the ADMIN role to this OpenELIS user in the OpenELIS admin UI.', 'Este segundo par de credenciales lo usa la importación masiva de catálogo del módulo (catalog_import.php). Asigne el rol ADMIN a este usuario de OpenELIS en la interfaz de administración de OpenELIS.'),
 ('Spanish (Latin American)', 'el', 'The password is never sent back to the browser: leave the field blank to keep the stored value.', 'La contraseña nunca vuelve al navegador: deje el campo en blanco para conservar el valor almacenado.'),
 ('Spanish (Latin American)', 'el', 'Select a valid lab provider.',                              'Seleccione un proveedor de laboratorio válido.'),
+('Spanish (Latin American)', 'el', 'Update tests',                                                'Actualizar tests'),
+('Spanish (Latin American)', 'el', 'Catalog ready',                                               'Catálogo OpenELIS configurado'),
+('Spanish (Latin American)', 'el', 'Manual / no OpenELIS',                                        'Manual / sin OpenELIS'),
+('Spanish (Latin American)', 'el', 'Last import',                                                 'Última sincronización'),
+('Spanish (Latin American)', 'el', 'Never',                                                       '—'),
 
 -- public/pending_orders.php (result reception UI)
 ('Spanish (Latin American)', 'el', 'Check Results (All)',                                      'Buscar Resultados (Todas)'),
@@ -175,7 +180,11 @@ INSERT IGNORE INTO `lang_custom` (`lang_description`, `lang_code`, `constant_nam
 ('Spanish (Latin American)', 'el', 'No pending results for this order',                        'No hay resultados pendientes para esta orden'),
 ('Spanish (Latin American)', 'el', 'results',                                                  'resultados'),
 ('Spanish (Latin American)', 'el', 'reports',                                                  'reportes'),
-('Spanish (Latin American)', 'el', 'failed',                                                   'fallaron');
+('Spanish (Latin American)', 'el', 'failed',                                                   'fallaron'),
+
+-- public/admin_mapping.php (structural picker)
+('Spanish (Latin American)', 'el', 'OpenELIS Test',                                             'Test de OpenELIS'),
+('Spanish (Latin American)', 'el', 'Search name or id...',                                      'Buscar por nombre o id...');
 
 -- ============================================================================
 -- SYNC: Populate lang_languages, lang_constants and lang_definitions

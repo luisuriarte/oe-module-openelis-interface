@@ -176,12 +176,20 @@ CREATE TABLE IF NOT EXISTS `mod_openelis_test_catalog` (
       COMMENT 'Spanish test name, as returned by TestNamesProvider (name.spanish)',
   `name_en` varchar(255) DEFAULT NULL
       COMMENT 'English test name, as returned by TestNamesProvider (name.english)',
+  `sample_type` varchar(64) DEFAULT NULL
+      COMMENT 'OpenELIS sample type NAME (e.g. Whole Blood) for this test, if the catalog exposes it. Used by the mapping picker to auto-fill the SNOMED specimen code from mod_openelis_specimen_map',
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
       ON UPDATE CURRENT_TIMESTAMP
       COMMENT 'Last time this catalog row was refreshed by the synchronizer',
   PRIMARY KEY (`openelis_test_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
   COMMENT='Local mirror of the OpenELIS test catalog for mapping autosuggestion';
+#EndIf
+
+#IfMissingColumn mod_openelis_test_catalog sample_type
+-- Upgrade path for mirrors created before the sample type column existed.
+ALTER TABLE `mod_openelis_test_catalog` ADD COLUMN `sample_type` varchar(64) DEFAULT NULL
+  COMMENT 'OpenELIS sample type NAME (e.g. Whole Blood) for this test, if the catalog exposes it';
 #EndIf
 
 #IfMissingColumn procedure_providers mod_openelis_catalog_login
@@ -204,3 +212,61 @@ ALTER TABLE `procedure_providers` ADD COLUMN `mod_openelis_catalog_login` varcha
 ALTER TABLE `procedure_providers` ADD COLUMN `mod_openelis_catalog_password` varchar(255) DEFAULT NULL
   COMMENT 'Password for the OpenELIS ADMIN catalog user. Never logged and never sent to the browser (field stays blank with a keep-existing behavior).';
 #EndIf
+
+#IfNotTable mod_openelis_specimen_map
+-- =============================================================================
+-- mod_openelis_specimen_map
+-- =============================================================================
+-- PURPOSE
+--   One-time translation table between the OpenELIS sample type NAME (the raw
+--   string the catalog API returns per test, e.g. "Whole Blood") and the
+--   SNOMED-CT specimen concept used in the FHIR ServiceRequest
+--   (Specimen.standardType, emitted by OrderMapper as a coding).
+--
+--   OpenELIS exposes the sample type only by NAME — it never provides the
+--   SNOMED code — so the mapping name -> concept is semantic and curated. The
+--   catalog importer (CatalogImportService) looks up every imported test's
+--   sample_type here and stores the resolved snomed_code on its
+--   mod_openelis_code_mapping row (snomed_specimen). That makes SNOMED fully
+--   automatic for imported tests: the table is curated ONCE (roughly one row
+--   per distinct sample type in the catalog, typically < 10) instead of typing
+--   a SNOMED code per test.
+--
+--   The importer INSERTs a row (snomed_code = NULL) for any sample_type it
+--   meets that is not in the table yet, and reports it in the import summary
+--   under `specimen_unmapped`, so a missing code surfaces as a delicious,
+--   one-time admin task instead of a silent gap.
+--
+--   The codes below are the standard, widely-used SNOMED-CT specimen concepts.
+--   Adjust/extend them to match the real sample types of your OpenELIS catalog
+--   (search OpenEMR's own SNOMED install: codes.code + code_types ct_key
+--   'SNOMED-CT'/'SNOMED' can validate/describe any code you add).
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS `mod_openelis_specimen_map` (
+  `id` int(11) NOT NULL AUTO_INCREMENT
+      COMMENT 'Internal primary key',
+  `sample_type` varchar(64) NOT NULL
+      COMMENT 'OpenELIS sample type name exactly as the catalog API returns it (e.g. Whole Blood). Comparison is exact (the importer passes the raw value)',
+  `snomed_code` varchar(32) DEFAULT NULL
+      COMMENT 'SNOMED-CT concept id for the specimen (e.g. 119297000 = blood specimen). NULL = not mapped yet (importer reports it)',
+  `name_es` varchar(255) DEFAULT NULL
+      COMMENT 'Spanish label for display/curation',
+  `name_en` varchar(255) DEFAULT NULL
+      COMMENT 'English label for display/curation',
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+      ON UPDATE CURRENT_TIMESTAMP
+      COMMENT 'Last time this row was touched',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_sample_type` (`sample_type`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+  COMMENT='OpenELIS sample type name -> SNOMED-CT specimen code (curated once)';
+#EndIf
+
+-- Seed the well-known specimen types so freshly installed sites import SNOMED
+-- out of the box. Idempotent: INSERT IGNORE keeps admin edits on re-runs.
+INSERT IGNORE INTO `mod_openelis_specimen_map` (`sample_type`, `snomed_code`, `name_en`)
+VALUES
+  ('Whole Blood', '119297000', 'Blood specimen'),
+  ('Serum',       '119364003', 'Serum specimen'),
+  ('Plasma',      '119361006', 'Plasma specimen'),
+  ('Urine',       '122575006', 'Urine specimen');
