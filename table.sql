@@ -264,9 +264,14 @@ CREATE TABLE IF NOT EXISTS `mod_openelis_specimen_map` (
 
 -- Seed the well-known specimen types so freshly installed sites import SNOMED
 -- out of the box. Idempotent: INSERT IGNORE keeps admin edits on re-runs.
+-- Note: the raw catalog string is matched EXACTLY, so a spelling variant in
+-- your OpenELIS (e.g. "Urines" with an 's', seen in real payloads) needs its
+-- own row. Both common spellings are seeded below; anything else surfaces in
+-- the import summary under `specimen_unmapped` for one-time curation.
 INSERT IGNORE INTO `mod_openelis_specimen_map` (`sample_type`, `snomed_code`, `name_en`)
 VALUES
   ('Whole Blood', '119297000', 'Blood specimen'),
   ('Serum',       '119364003', 'Serum specimen'),
   ('Plasma',      '119361006', 'Plasma specimen'),
-  ('Urine',       '122575006', 'Urine specimen');
+  ('Urine',       '122575006', 'Urine specimen'),
+  ('Urines',      '122575006', 'Urine specimen');

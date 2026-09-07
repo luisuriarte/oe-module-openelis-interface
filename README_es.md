@@ -308,8 +308,12 @@ SNOMED-CT y el importador la aplica automáticamente a cada test:
 | `snomed_code` | Código SNOMED-CT del espécimen (ej. `119297000` = sangre). `NULL` = sin mapear aún |
 
 Se siembra con los conceptos estándar más comunes (`Whole Blood` →
-`119297000`, `Serum` → `119364003`, `Plasma` → `119361006`, `Urine` →
-`122575006`); ajuste/agregue filas según los tipos reales de su catálogo. El
+`119297000`, `Serum` → `119364003`, `Plasma` → `119361006`, `Urine`/`Urines` →
+`122575006`); ajuste/agregue filas según los tipos reales de su catálogo. La
+comparación es **exacta** (sin normalizar), así que una variante de ortografía
+("Urines" con s, vista en payloads reales) es una fila distinta; cualquier tipo
+de muestra no sembrado se auto-registra con `snomed_code = NULL` y se reporta en
+el resumen del import como `specimen_unmapped`. El
 SNOMED instalado en OpenEMR (`codes` + `code_types`, `ct_key` `SNOMED-CT`/`SNOMED`)
 sirve para **validar y describir** cualquier código que agregue (no traduce
 nombres automáticamente: la relación nombre→concepto es semántica y se cura una

@@ -303,8 +303,12 @@ applies it to every test automatically:
 | `snomed_code` | SNOMED-CT specimen concept (e.g. `119297000` = blood specimen). `NULL` = not curated yet |
 
 Seeded with the common standard concepts (`Whole Blood` → `119297000`,
-`Serum` → `119364003`, `Plasma` → `119361006`, `Urine` → `122575006`); adjust/add
-rows to match your catalog's real sample types. OpenEMR's installed SNOMED
+`Serum` → `119364003`, `Plasma` → `119361006`, `Urine`/`Urines` → `122575006`);
+adjust/add rows to match your catalog's real sample types. Matching is **exact**
+(no normalization), so a spelling variant ("Urines" with an 's', seen in real
+payloads) is its own row; any sample type not seeded is auto-registered with
+`snomed_code = NULL` and reported under `specimen_unmapped` in the import
+summary. OpenEMR's installed SNOMED
 (`codes` + `code_types`, `ct_key` `SNOMED-CT`/`SNOMED`) is useful to **validate
 and describe** any code you add (it does not translate names automatically — the
 name→concept relation is semantic and is curated once here).
