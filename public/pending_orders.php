@@ -124,7 +124,7 @@ $offset = ($page - 1) * $perPage;
 
 $dataSql = "SELECT po.procedure_order_id, po.date_ordered, po.order_priority, po.order_status,
                    po.mod_openelis_sync_status, po.date_transmitted, po.control_id,
-                   po.patient_id, po.lab_id,
+                   po.patient_id, po.lab_id, po.mod_openelis_patient_ref,
                    pd.pubpid, pd.fname, pd.lname,
                    pp.name AS provider_name
     FROM procedure_order po
@@ -236,6 +236,11 @@ $webRoot = $GLOBALS['webroot'] ?? '';
                 <?php endif; ?>
             </form>
         </div>
+        <div class="col-md-4 col-lg-6 text-md-end">
+            <button type="button" class="btn btn-sm btn-info" onclick="checkResultsAll(this)">
+                <span class="icon-comment-alt"></span> <?php echo xlt("Check Results (All)"); ?>
+            </button>
+        </div>
     </div>
 
     <!-- Orders table -->
@@ -305,6 +310,7 @@ $webRoot = $GLOBALS['webroot'] ?? '';
                             <?php else: ?>
                                 <span class="text-muted"><?php echo xlt("Pending"); ?></span>
                             <?php endif; ?>
+                            <div class="results-cell"></div>
                         </td>
                         <td class="text-end">
                             <?php if ($canSend): ?>
@@ -314,8 +320,10 @@ $webRoot = $GLOBALS['webroot'] ?? '';
                                     <?php echo xlt("Send"); ?>
                                 </button>
                             <?php elseif ($syncStatus === 'sent'): ?>
-                                <button type="button" class="btn btn-sm btn-outline-success" disabled>
-                                    <?php echo xlt("Sent"); ?>
+                                <button type="button" class="btn btn-sm btn-outline-info btn-results"
+                                        data-order-id="<?php echo $orderId; ?>"
+                                        onclick="checkResults(this, <?php echo $orderId; ?>)">
+                                    <?php echo xlt("Results"); ?>
                                 </button>
                             <?php else: ?>
                                 <button type="button" class="btn btn-sm btn-outline-secondary" disabled
@@ -381,6 +389,26 @@ $webRoot = $GLOBALS['webroot'] ?? '';
     <?php endif; ?>
 
 <script>
+function postOpenElisAction(data, okLabel) {
+    var formData = new FormData();
+    Object.keys(data).forEach(function(k) { formData.append(k, data[k]); });
+    formData.append('csrf_token_form', <?php echo js_escape($csrfToken); ?>);
+
+    return fetch(<?php echo js_escape($webRoot . '/public/modules/openelis/send_order_action.php'); ?>, {
+        method: 'POST',
+        body: formData,
+        credentials: 'same-origin'
+    })
+    .then(function(response) {
+        if (!response.ok) {
+            return response.json().catch(function() {
+                throw new Error('HTTP ' + response.status);
+            });
+        }
+        return response.json();
+    });
+}
+
 function sendToOpenELIS(btn, orderId) {
     if (!confirm(<?php echo xlj("Send this order to OpenELIS?"); ?>)) {
         return;
@@ -392,25 +420,7 @@ function sendToOpenELIS(btn, orderId) {
     btn.classList.remove('btn-success');
     btn.classList.add('btn-warning');
 
-    var formData = new FormData();
-    formData.append('order_id', orderId);
-    formData.append('csrf_token_form', <?php echo js_escape($csrfToken); ?>);
-    formData.append('action', 'send');
-
-    fetch(<?php echo js_escape($webRoot . '/public/modules/openelis/send_order_action.php'); ?>, {
-        method: 'POST',
-        body: formData,
-        credentials: 'same-origin'
-    })
-    .then(function(response) {
-        if (!response.ok) {
-            // Non-2xx: try to parse JSON, else surface the HTTP status
-            return response.json().catch(function() {
-                throw new Error('HTTP ' + response.status);
-            });
-        }
-        return response.json();
-    })
+    postOpenElisAction({ order_id: orderId, action: 'send' }, null)
     .then(function(data) {
         var row = document.getElementById('order-row-' + orderId);
         var statusCell = row.querySelector('.sync-status');
@@ -419,7 +429,8 @@ function sendToOpenELIS(btn, orderId) {
             btn.innerHTML = '✓ ' + <?php echo xlj("Sent"); ?>;
             btn.classList.remove('btn-warning');
             btn.classList.add('btn-success');
-            statusCell.innerHTML = '<span class="result-ok"><?php echo xla("Sent to OpenELIS"); ?></span>';
+            statusCell.innerHTML = '<span class="result-ok"><?php echo xla("Sent to OpenELIS"); ?></span>' +
+                '<div class="results-cell"></div>';
         } else {
             btn.innerHTML = '✗ ' + <?php echo xlj("Error"); ?>;
             btn.classList.remove('btn-warning');
@@ -438,7 +449,6 @@ function sendToOpenELIS(btn, orderId) {
         btn.innerHTML = '✗ Error';
         btn.classList.remove('btn-warning');
         btn.classList.add('btn-danger');
-        // Surface the actual error detail (HTTP status or parse/net error)
         alert('Error de envío: ' + (err && err.message ? err.message : 'desconocido'));
         console.error('OpenELIS send error:', err);
 
@@ -448,6 +458,55 @@ function sendToOpenELIS(btn, orderId) {
             btn.classList.remove('btn-danger');
             btn.classList.add('btn-success');
         }, 5000);
+    });
+}
+
+function checkResults(btn, orderId) {
+    var originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-sm" role="status"></span> ' + <?php echo xlj("Checking..."); ?>;
+
+    postOpenElisAction({ order_id: orderId, action: 'check_results' }, null)
+    .then(function(data) {
+        var row = document.getElementById('order-row-' + orderId);
+        var resultsCell = row.querySelector('.results-cell');
+
+        if (data.success) {
+            var msg = data.message ? data.message : '<?php echo xla("Results"); ?>';
+            resultsCell.innerHTML = '<span class="result-ok">' + msg.replace(/"/g, '&quot;') + '</span>';
+        } else {
+            resultsCell.innerHTML = '<span class="result-error" title="' + data.message.replace(/"/g, '&quot;') + '"><?php echo xla("Error"); ?></span>';
+        }
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+    })
+    .catch(function(err) {
+        alert('Error al buscar resultados: ' + (err && err.message ? err.message : 'desconocido'));
+        console.error('OpenELIS results error:', err);
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+    });
+}
+
+function checkResultsAll(btn) {
+    var originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-sm" role="status"></span> ' + <?php echo xlj("Checking..."); ?>;
+
+    postOpenElisAction({ action: 'check_results_all' }, null)
+    .then(function(data) {
+        alert(data.message ? data.message : '<?php echo xla("Requested"); ?>');
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+        if (data.success && (data.stats && data.stats.results > 0)) {
+            window.location.reload();
+        }
+    })
+    .catch(function(err) {
+        alert('Error al buscar resultados: ' + (err && err.message ? err.message : 'desconocido'));
+        console.error('OpenELIS results error:', err);
+        btn.disabled = false;
+        btn.innerHTML = originalText;
     });
 }
 </script>

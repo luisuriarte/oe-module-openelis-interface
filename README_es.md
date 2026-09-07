@@ -339,6 +339,56 @@ foreach ($procedureCodes as $code) {
 
 ---
 
+## 📥 Recepción de resultados (laboratorio OpenELIS → OpenEMR)
+
+Los resultados se traen **bajo demanda** (botones) — aún no hay sondeo automático.
+
+### Flujo (por orden)
+
+1. Al enviar una orden (`send_order_action.php?action=send`), cada línea de prueba
+   guarda la referencia FHIR `ServiceRequest/<uuid>` que OpenELIS asignó
+   (`procedure_order_code.mod_openelis_service_request_id`) y la orden guarda la
+   referencia de paciente creada (`procedure_order.mod_openelis_patient_ref`).
+2. `pending_orders.php` muestra un botón **Resultados** por cada orden enviada y
+   un botón global **Buscar Resultados (Todas)**. Ambos hacen POST a
+   `send_order_action.php` con `action=check_results` (una orden) o
+   `action=check_results_all` (todas las órdenes con resultados pendientes, un
+   cliente HTTP por proveedor).
+3. `ResultSyncService::syncOrderResults($orderId)`:
+   - verifica que el proveedor sea `WS` y tenga credenciales de catálogo;
+   - verifica la identidad del paciente — `GET Patient/<ref>` y comprueba que el
+     `nationalId` de OpenELIS sea igual a `patient_data.pubpid` de OpenEMR; ante
+     una discrepancia la orden se rechaza (**no se importa nada**);
+   - por cada línea de prueba pendiente consulta
+     `DiagnosticReport?based-on=ServiceRequest/<uuid>`;
+   - `ResultMapper::toOpenEmr()` mapea cada informe y sus observaciones a las
+     tablas nativas de laboratorio de OpenEMR `procedure_report` /
+     `procedure_result` (así los resultados aparecen en la UI estándar);
+   - marca la línea con `mod_openelis_results_status = 'downloaded'`
+     (re-ejecuciones idempotentes; las líneas ya descargadas se omiten).
+
+### Valores de la columna de estado
+
+`procedure_order_code.mod_openelis_results_status`: `pending` (al enviar),
+`downloaded`, `error`.
+
+### Observaciones / casos límite
+
+- El subject del informe debe coincidir con el `Patient/<ref>` verificado de la
+  orden; lo que no coincida se omite con una entrada `error_log`.
+- `DiagnosticReport.status` final/amended/corrected → `report_status = 'complete'`;
+  otros estados → `received`.
+- Valores de `Observation`: `valueQuantity` (numérico `N`), `valueString`
+  (texto `S`, largo → `L`), `valueCodeableConcept`, `valueInteger`. Rangos desde
+  `referenceRange[].low/high/text`; banderas de anormalidad desde los codings de
+  `interpretation` (H/HH→high, L/LL→low, A/AA→yes).
+- Use `public/probe_results_api.php` en un servidor de prueba para inspeccionar
+  los payloads reales (`?ppid=<id>` lista los informes recientes;
+  `?ppid=<id>&sr=ServiceRequest/<uuid>` muestra los informes de una prueba + sus
+  observaciones) antes de confiar en el mapeo.
+
+---
+
 ## 🛠 Desarrollo
 
 ### Stack tecnológico

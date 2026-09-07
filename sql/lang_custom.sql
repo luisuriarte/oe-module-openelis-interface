@@ -159,7 +159,23 @@ INSERT IGNORE INTO `lang_custom` (`lang_description`, `lang_code`, `constant_nam
 ('Spanish (Latin American)', 'el', 'OpenELIS ADMIN user for the REST test-catalog API - different from the operational user used to send orders (Login/Password above).', 'Usuario con rol ADMIN de OpenELIS para la API REST test-catalog: es distinto del usuario operativo usado para enviar órdenes (Login/Password de más arriba).'),
 ('Spanish (Latin American)', 'el', 'This second credential set is used by the module\'s bulk catalog import (catalog_import.php). Assign the ADMIN role to this OpenELIS user in the OpenELIS admin UI.', 'Este segundo par de credenciales lo usa la importación masiva de catálogo del módulo (catalog_import.php). Asigne el rol ADMIN a este usuario de OpenELIS en la interfaz de administración de OpenELIS.'),
 ('Spanish (Latin American)', 'el', 'The password is never sent back to the browser: leave the field blank to keep the stored value.', 'La contraseña nunca vuelve al navegador: deje el campo en blanco para conservar el valor almacenado.'),
-('Spanish (Latin American)', 'el', 'Select a valid lab provider.',                              'Seleccione un proveedor de laboratorio válido.');
+('Spanish (Latin American)', 'el', 'Select a valid lab provider.',                              'Seleccione un proveedor de laboratorio válido.'),
+
+-- public/pending_orders.php (result reception UI)
+('Spanish (Latin American)', 'el', 'Check Results (All)',                                      'Buscar Resultados (Todas)'),
+('Spanish (Latin American)', 'el', 'Results',                                                  'Resultados'),
+('Spanish (Latin American)', 'el', 'Checking...',                                              'Buscando...'),
+
+-- src/Service/ResultSyncService.php + send_order_action.php (reception messages)
+('Spanish (Latin American)', 'el', 'The order was not sent to OpenELIS',                       'La orden no fue enviada a OpenELIS'),
+('Spanish (Latin American)', 'el', 'Lab provider protocol must be set to Web Services (WS) to receive results from OpenELIS', 'El protocolo del proveedor de laboratorio debe configurarse como Web Services (WS) para recibir resultados de OpenELIS'),
+('Spanish (Latin American)', 'el', 'Patient not found',                                       'Paciente no encontrado'),
+('Spanish (Latin American)', 'el', 'Patient identity mismatch',                                'No coincide la identidad del paciente'),
+('Spanish (Latin American)', 'el', 'OpenELIS patient not found',                               'Paciente no encontrado en OpenELIS'),
+('Spanish (Latin American)', 'el', 'No pending results for this order',                        'No hay resultados pendientes para esta orden'),
+('Spanish (Latin American)', 'el', 'results',                                                  'resultados'),
+('Spanish (Latin American)', 'el', 'reports',                                                  'reportes'),
+('Spanish (Latin American)', 'el', 'failed',                                                   'fallaron');
 
 -- ============================================================================
 -- SYNC: Populate lang_languages, lang_constants and lang_definitions

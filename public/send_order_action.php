@@ -1,9 +1,13 @@
 <?php
 
 /**
- * AJAX endpoint to send a procedure_order to OpenELIS.
+ * AJAX endpoint for the OpenELIS module.
  *
- * Accepts POST with order_id + csrf_token_form.
+ * Actions (POST + csrf_token_form):
+ *   - send              (@order_id)           send a procedure_order to OpenELIS
+ *   - check_results     (@order_id)           import DiagnosticReports for one order
+ *   - check_results_all ()                    import results for every order with pending results
+ *
  * Returns JSON response.
  *
  * @package OpenEMR
@@ -72,6 +76,7 @@ use OpenEMR\Common\Acl\AclMain;
 use OpenEMR\Common\Csrf\CsrfUtils;
 use OpenEMR\Modules\OpenElis\Client\OpenElisApiClient;
 use OpenEMR\Modules\OpenElis\Service\OrderSyncService;
+use OpenEMR\Modules\OpenElis\Service\ResultSyncService;
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -108,16 +113,29 @@ if (!oe_module_csrf_verify($_POST['csrf_token_form'] ?? '')) {
     exit;
 }
 
-// Validate order_id
-$orderId = (int)($_POST['order_id'] ?? 0);
-if ($orderId <= 0) {
-    http_response_code(400);
-    echo json_encode(['success' => false, 'message' => xl('Invalid order ID')]);
-    exit;
+// Validate order_id (single-order actions only; check_results_all iterates all)
+$action = $_POST['action'] ?? 'send';
+if (in_array($action, ['send', 'check_results'], true)) {
+    $orderId = (int)($_POST['order_id'] ?? 0);
+    if ($orderId <= 0) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => xl('Invalid order ID')]);
+        exit;
+    }
+} else {
+    $orderId = 0;
 }
 
-// Send to OpenELIS
 try {
+    // check_results_all builds one client per order/provider, so it only needs
+    // a placeholder client to satisfy the service constructor.
+    if ($action === 'check_results_all') {
+        $resultService = new ResultSyncService(new OpenElisApiClient('', '', ''));
+        $result = $resultService->syncAllResults();
+        echo json_encode($result);
+        exit;
+    }
+
     // We need a valid OpenElisApiClient to instantiate the service.
     // The service will create its own client from the order's provider.
     // For this endpoint, we need to know the provider info to create the client.
@@ -160,12 +178,17 @@ try {
         $order['password']
     );
 
-    $syncService = new OrderSyncService($client);
-    $result = $syncService->sendOrderToOpenElis($orderId);
+    if ($action === 'check_results') {
+        $resultService = new ResultSyncService($client);
+        $result = $resultService->syncOrderResults($orderId);
+    } else {
+        $syncService = new OrderSyncService($client);
+        $result = $syncService->sendOrderToOpenElis($orderId);
+    }
 
     echo json_encode($result);
 } catch (\Exception $e) {
-    error_log("OpenELIS sync endpoint error for order #$orderId: " . $e->getMessage());
+    error_log("OpenELIS action '$action' error for order #$orderId: " . $e->getMessage());
     http_response_code(500);
     echo json_encode([
         'success' => false,

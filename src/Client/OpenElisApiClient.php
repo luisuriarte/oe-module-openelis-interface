@@ -25,6 +25,155 @@ class OpenElisApiClient
     }
 
     /**
+     * Fetch a single FHIR resource by its logical id.
+     *
+     * @param string $resourceType  FHIR resource type (e.g. "Patient", "Observation")
+     * @param string $id            Logical id (uuid)
+     * @return array|null           The FHIR resource, or null if not found
+     */
+    public function fetchResource(string $resourceType, string $id): ?array
+    {
+        $response = $this->request('GET', $resourceType . '/' . $id);
+
+        if ($response['status'] >= 400) {
+            return null;
+        }
+
+        $resource = json_decode($response['body'], true);
+        return is_array($resource) ? $resource : null;
+    }
+
+    /**
+     * Search DiagnosticReports that are based on a ServiceRequest (chained
+     * FHIR search). Each report carries the lab results for that test line.
+     *
+     * @param string $serviceRequestRef  e.g. "ServiceRequest/<uuid>"
+     * @return array                     List of DiagnosticReport resources (may be empty)
+     */
+    public function findDiagnosticReportsByServiceRequest(string $serviceRequestRef): array
+    {
+        $response = $this->request('GET', 'DiagnosticReport', [
+            'based-on' => $serviceRequestRef,
+        ]);
+
+        if ($response['status'] >= 400) {
+            return [];
+        }
+
+        $bundle = json_decode($response['body'], true);
+        if (!is_array($bundle)) {
+            return [];
+        }
+
+        $reports = [];
+        foreach (($bundle['entry'] ?? []) as $entry) {
+            $resource = $entry['resource'] ?? null;
+            if (!empty($resource['resourceType']) && $resource['resourceType'] === 'DiagnosticReport') {
+                $reports[] = $resource;
+            }
+        }
+
+        return $reports;
+    }
+
+    /**
+     * List recently-issued diagnostic reports (probe/audit helper).
+     *
+     * @param int $count  Max reports to return
+     * @return array      List of DiagnosticReport resources (may be empty)
+     */
+    public function listDiagnosticReports(int $count = 20): array
+    {
+        $response = $this->request('GET', 'DiagnosticReport', [
+            '_count' => $count,
+            '_sort' => '-issued',
+        ]);
+
+        if ($response['status'] >= 400) {
+            return [];
+        }
+
+        $bundle = json_decode($response['body'], true);
+        if (!is_array($bundle)) {
+            return [];
+        }
+
+        $reports = [];
+        foreach (($bundle['entry'] ?? []) as $entry) {
+            $resource = $entry['resource'] ?? null;
+            if (!empty($resource['resourceType']) && $resource['resourceType'] === 'DiagnosticReport') {
+                $reports[] = $resource;
+            }
+        }
+
+        return $reports;
+    }
+
+    /**
+     * Search Observations referenced by a DiagnosticReport. Tries FHIR
+     * _include first (single search, no extra round-trips); if the server does
+     * not honor it, falls back to fetching each observation reference.
+     *
+     * @param array $report  A DiagnosticReport resource
+     * @return array         List of Observation resources
+     */
+    public function fetchReportObservations(array $report): array
+    {
+        $reportId = $report['id'] ?? '';
+        if ($reportId !== '') {
+            $response = $this->request('GET', 'DiagnosticReport/' . $reportId, [
+                '_include' => 'DiagnosticReport:result',
+            ]);
+            if ($response['status'] < 400) {
+                $bundle = json_decode($response['body'], true);
+                if (is_array($bundle)) {
+                    $observations = [];
+                    foreach (($bundle['entry'] ?? []) as $entry) {
+                        $resource = $entry['resource'] ?? null;
+                        if (($resource['resourceType'] ?? '') === 'Observation') {
+                            $observations[] = $resource;
+                        }
+                    }
+                    if ($observations) {
+                        return $observations;
+                    }
+                }
+            }
+        }
+
+        // Fallback: fetch each observation reference individually.
+        $observations = [];
+        foreach (($report['result'] ?? []) as $ref) {
+            $got = $this->fetchResourceByReference($ref);
+            if ($got !== null) {
+                $observations[] = $got;
+            }
+        }
+
+        return $observations;
+    }
+
+    /**
+     * Resolve a relative FHIR reference (e.g. "Observation/<uuid>" or
+     * "Observation/123") to its resource; handles contained resources and
+     * absolute references on the loopback server.
+     */
+    public function fetchResourceByReference(array $ref): ?array
+    {
+        $reference = $ref['reference'] ?? '';
+        if (empty($reference)) {
+            return null;
+        }
+
+        // Relative reference like "Observation/<uuid>"
+        if (preg_match('#^([A-Za-z]+)/(.+)$#', $reference, $m)) {
+            return $this->fetchResource($m[1], $m[2]);
+        }
+
+        return null;
+    }
+
+    /**
      * Find a Patient in OpenELIS by their national identifier (pubpid).
      *
      * @param string $pubpid  The patient's external/public identifier

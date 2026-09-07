@@ -335,6 +335,55 @@ foreach ($procedureCodes as $code) {
 
 ---
 
+## 📥 Result reception (Lab results back OpenELIS → OpenEMR)
+
+Results are pulled **on demand** (buttons) — no polling yet.
+
+### Flow (per order)
+
+1. When an order is sent (`send_order_action.php?action=send`), each test line
+   stores the FHIR `ServiceRequest/<uuid>` that OpenELIS assigned
+   (`procedure_order_code.mod_openelis_service_request_id`) and the order stores
+   the created patient reference (`procedure_order.mod_openelis_patient_ref`).
+2. `pending_orders.php` shows a **Results** button per sent order and a global
+   **Check Results (All)** button. Both POST to `send_order_action.php` with
+   `action=check_results` (one order) or `action=check_results_all` (every order
+   with pending results, one HTTP client per provider).
+3. `ResultSyncService::syncOrderResults($orderId)`:
+   - verifies the provider is `WS` + has catalog credentials;
+   - verifies patient identity — `GET Patient/<ref>` and checks that the
+     OpenELIS `nationalId` equals OpenEMR `patient_data.pubpid`; on mismatch the
+     order is rejected (**nothing is imported**);
+   - for each pending test line queries
+     `DiagnosticReport?based-on=ServiceRequest/<uuid>`;
+   - `ResultMapper::toOpenEmr()` maps each report + its observations into the
+     native OpenEMR lab tables `procedure_report` / `procedure_result`
+     (so results appear in the standard results UI);
+   - marks the line `mod_openelis_results_status = 'downloaded'`
+     (idempotent re-runs; lines already downloaded are skipped).
+
+### Status column values
+
+`procedure_order_code.mod_openelis_results_status`: `pending` (set at send time),
+`downloaded`, `error`.
+
+### Observations/edge cases
+
+- Report subject must equal the order's verified `Patient/<ref>`; anything else
+  is skipped with an `error_log` entry.
+- `DiagnosticReport.status` final/amended/corrected → `report_status = 'complete'`;
+  other statuses → `received`.
+- `Observation` values: `valueQuantity` (numeric `N`), `valueString` (string `S`,
+  long → `L`), `valueCodeableConcept`, `valueInteger`. Reference ranges from
+  `referenceRange[].low/high/text`; abnormal flags from `interpretation` codings
+  (H/HH→high, L/LL→low, A/AA→yes).
+- Use `public/probe_results_api.php` on a test server to inspect the actual
+  payloads (`?ppid=<id>` lists recent reports; `?ppid=<id>&sr=ServiceRequest/<uuid>`
+  shows the reports for one test + their observations) before relying on the
+  mapping.
+
+---
+
 ## 🛠 Development
 
 ### Tech Stack

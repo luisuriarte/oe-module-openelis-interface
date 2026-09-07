@@ -183,6 +183,7 @@ class OrderSyncService
             $entries = [];
             $skippedCodes = [];
             $openelisIds = [];
+            $serviceRequestUris = []; // urn:uuid => procedure_order_seq, to correlate the response back to each test line
 
             foreach ($codes as $code) {
                 $procedureCode = $code['procedure_code'] ?? '';
@@ -201,6 +202,9 @@ class OrderSyncService
                     continue;
                 }
 
+                $srUri = 'urn:uuid:' . uniqid('sr-', true);
+                $serviceRequestUris[$srUri] = (int)($code['procedure_order_seq'] ?? 0);
+
                 // ServiceRequest
                 $serviceRequest = OrderMapper::toFhirServiceRequest(
                     $order,
@@ -211,7 +215,7 @@ class OrderSyncService
                 );
                 $entries[] = [
                     'resource' => $serviceRequest,
-                    'fullUrl' => 'urn:uuid:' . uniqid('sr-', true),
+                    'fullUrl' => $srUri,
                 ];
 
                 // Specimen
@@ -235,11 +239,29 @@ class OrderSyncService
             $response = $client->createBundle($bundle);
 
             // 9. Extract created resource IDs from response
+            // HAPI FHIR returns the transaction entries in the SAME order as the
+            // request, with the request fullUrl echoed back, so we can line each
+            // ServiceRequest response up with the test line that produced it and
+            // store its "ServiceRequest/<uuid>" ref as the correlation key that
+            // reception (ResultSyncService) will use to fetch DiagnosticReports.
             if (!empty($response['entry'])) {
                 foreach ($response['entry'] as $entry) {
                     $resourceType = $entry['response']['location'] ?? '';
                     if ($resourceType) {
                         $openelisIds[] = $resourceType;
+                    }
+
+                    $srRef = $entry['response']['location'] ?? '';
+                    $seq = $serviceRequestUris[$entry['fullUrl'] ?? ''] ?? null;
+                    if ($seq !== null && preg_match('#^ServiceRequest/.+$#', $srRef)) {
+                        sqlStatement(
+                            "UPDATE procedure_order_code
+                             SET mod_openelis_service_request_id = ?,
+                                 mod_openelis_results_status = 'pending',
+                                 mod_openelis_results_at = NULL
+                             WHERE procedure_order_id = ? AND procedure_order_seq = ?",
+                            [$srRef, $procedureOrderId, $seq]
+                        );
                     }
                 }
             }
@@ -247,16 +269,18 @@ class OrderSyncService
             // 10. Mark order as synced
             // Store the full OpenELIS resource reference (e.g. "ServiceRequest/<uuid>")
             // in our own column. We deliberately do NOT reuse control_id, which is
-            // reserved for HL7 order/result message correlation.
+            // reserved for HL7 order/result message correlation. The Patient ref is
+            // kept too: reception verifies nationalId == patient_data.pubpid against it.
             $firstId = $openelisIds[0] ?? '';
 
             sqlStatement(
                 "UPDATE procedure_order
                  SET date_transmitted = NOW(),
                      mod_openelis_sync_status = 'sent',
-                     mod_openelis_order_id = ?
+                     mod_openelis_order_id = ?,
+                     mod_openelis_patient_ref = ?
                  WHERE procedure_order_id = ?",
-                [$firstId ?: null, $procedureOrderId]
+                [$firstId ?: null, $patientRef, $procedureOrderId]
             );
 
             $message = xl('Order sent to OpenELIS successfully');

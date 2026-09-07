@@ -108,6 +108,26 @@ ALTER TABLE `procedure_order` ADD COLUMN `mod_openelis_order_id` VARCHAR(64) DEF
     COMMENT 'OpenELIS ServiceRequest ID returned after order transmission';
 #EndIf
 
+#IfMissingColumn procedure_order mod_openelis_patient_ref
+ALTER TABLE `procedure_order` ADD COLUMN `mod_openelis_patient_ref` VARCHAR(64) DEFAULT NULL
+    COMMENT 'OpenELIS Patient resource ref ("Patient/<uuid>") returned when the order was sent; used to correlate and verify results on reception';
+#EndIf
+
+#IfMissingColumn procedure_order_code mod_openelis_service_request_id
+ALTER TABLE `procedure_order_code` ADD COLUMN `mod_openelis_service_request_id` VARCHAR(64) DEFAULT NULL
+    COMMENT 'OpenELIS ServiceRequest resource ref ("ServiceRequest/<uuid>") for THIS test line, returned by the send transaction; the correlation key for fetching DiagnosticReports on reception';
+#EndIf
+
+#IfMissingColumn procedure_order_code mod_openelis_results_status
+ALTER TABLE `procedure_order_code` ADD COLUMN `mod_openelis_results_status` ENUM('pending','downloaded','error') DEFAULT NULL
+    COMMENT 'OpenELIS results sync state for this test line: NULL/undefined = nothing fetched yet, downloaded = results already written, error = last fetch failed';
+#EndIf
+
+#IfMissingColumn procedure_order_code mod_openelis_results_at
+ALTER TABLE `procedure_order_code` ADD COLUMN `mod_openelis_results_at` DATETIME DEFAULT NULL
+    COMMENT 'When results for this test line were last written into procedure_report/procedure_result by ResultSyncService';
+#EndIf
+
 #IfNotTable mod_openelis_config
 -- =============================================================================
 -- mod_openelis_config
