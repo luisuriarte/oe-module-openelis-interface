@@ -74,6 +74,14 @@ class CatalogImportService
     /** procedure_type.name is varchar(63). */
     private const PROCEDURE_TYPE_NAME_MAX = 63;
 
+    /**
+     * OpenEMR order type stamped on every imported procedure_type row
+     * (procedure_type_name). OpenELIS only catalogs lab tests, and its test
+     * payload has no field that maps to the order_type list, so all imported
+     * rows are classified as laboratory_test.
+     */
+    private const PROCEDURE_TYPE_ORDER_NAME = 'laboratory_test';
+
     public function __construct(?CatalogApiClient $clientOverride = null, ?array $providerOverride = null)
     {
         $this->clientOverride = $clientOverride;
@@ -409,9 +417,9 @@ class CatalogImportService
             $reactivated = (int)($found['activity'] ?? 1) === 0;
             if (!$dryRun) {
                 sqlStatement(
-                    "UPDATE procedure_type SET name = ?, parent = 0, lab_id = ?, activity = 1, seq = ?
+                    "UPDATE procedure_type SET name = ?, parent = 0, lab_id = ?, procedure_type_name = ?, activity = 1, seq = ?
                      WHERE procedure_type_id = ?",
-                    [$name, $providerId, $seq, $id]
+                    [$name, $providerId, self::PROCEDURE_TYPE_ORDER_NAME, $seq, $id]
                 );
             }
             return ['id' => $id, 'created' => false, 'reactivated' => $reactivated];
@@ -419,9 +427,9 @@ class CatalogImportService
 
         if (!$dryRun) {
             sqlStatement(
-                "INSERT INTO procedure_type (parent, name, lab_id, procedure_code, procedure_type, activity, seq)
-                 VALUES (0, ?, ?, ?, 'grp', 1, ?)",
-                [$name, $providerId, $code, $seq]
+                "INSERT INTO procedure_type (parent, name, lab_id, procedure_code, procedure_type_name, procedure_type, activity, seq)
+                 VALUES (0, ?, ?, ?, ?, 'grp', 1, ?)",
+                [$name, $providerId, $code, self::PROCEDURE_TYPE_ORDER_NAME, $seq]
             );
             $found = $this->lookupProcedureType($code);
             $id = $found['id'] ?? 0;
@@ -448,9 +456,9 @@ class CatalogImportService
             if (!$dryRun) {
                 sqlStatement(
                     "UPDATE procedure_type
-                     SET name = ?, parent = ?, lab_id = ?, standard_code = ?, activity = 1, seq = ?
+                     SET name = ?, parent = ?, lab_id = ?, standard_code = ?, procedure_type_name = ?, activity = 1, seq = ?
                      WHERE procedure_type_id = ?",
-                    [$name, $parentId, $providerId, $standardCode, $seq, $id]
+                    [$name, $parentId, $providerId, $standardCode, self::PROCEDURE_TYPE_ORDER_NAME, $seq, $id]
                 );
             }
             return ['created' => false, 'reactivated' => $reactivated];
@@ -458,9 +466,9 @@ class CatalogImportService
 
         if (!$dryRun) {
             sqlStatement(
-                "INSERT INTO procedure_type (parent, name, lab_id, procedure_code, standard_code, procedure_type, activity, seq)
-                 VALUES (?, ?, ?, ?, ?, 'ord', 1, ?)",
-                [$parentId, $name, $providerId, $code, $standardCode, $seq]
+                "INSERT INTO procedure_type (parent, name, lab_id, procedure_code, standard_code, procedure_type_name, procedure_type, activity, seq)
+                 VALUES (?, ?, ?, ?, ?, ?, 'ord', 1, ?)",
+                [$parentId, $name, $providerId, $code, $standardCode, self::PROCEDURE_TYPE_ORDER_NAME, $seq]
             );
         }
         return ['created' => true, 'reactivated' => false];
