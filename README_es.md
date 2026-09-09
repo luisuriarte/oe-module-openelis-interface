@@ -92,7 +92,7 @@ openelis/
 ├── 📂 patches/
 │   └── 📄 common.php.patch.txt           # Parche (8.0.0): botón "Enviar a OpenELIS"
 │   └── 📄 procedure_provider_edit.php.patch.txt  # Parche (8.0.0): credenciales de catálogo en form de proveedores
-│   └── 📄 find_order_popup.php.patch.txt # Parche (8.2.0): filtro por laboratorio en el picker de procedimientos
+│   └── 📄 find_order_popup.php.patch.txt # Parche (8.2.0): filtro estricto por proveedor y tipo de pedido en el picker de procedimientos
 │   └── 📂 openemr/                       # Archivos COMPLETOS parcheados (listos para producción)
 │       └── 📂 interface/forms/procedure_order/common.php
 │       └── 📂 interface/orders/procedure_provider_edit.php

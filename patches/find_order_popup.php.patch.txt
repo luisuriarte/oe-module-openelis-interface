@@ -1,43 +1,51 @@
-# Patch: Multi-lab scoping in the Procedure Picker (find_order_popup.php)
+# Patch: Strict per-provider scoping in the Procedure Picker (find_order_popup.php)
 #
 # File: interface/orders/find_order_popup.php
 # OpenEMR version: 8.2.0 - ORIGINAL file baseline
 #
 # PREMISE
 # The picker is opened from the Procedure Order form carrying the selected
-# "Sending To" lab in $_GET['labid'] (procedure_providers.ppid). Before this
-# patch the SEARCH listing never used labid in its WHERE for catalog rows that
-# carry a procedure_type_name (i.e. every test imported by catalog_import.php),
-# so tests from ALL labs showed up mixed together regardless of the chosen lab.
-# That defeats the multi-provider architecture where the same test exists per
-# lab (OE4-T42 vs OE5-T42) with procedure_type.lab_id = the real provider.
+# "Sending To" provider in $_GET['labid'] (procedure_providers.ppid, matching
+# procedure_type.lab_id) and the order type in $_REQUEST['otype']
+# (procedure_type.procedure_type_name). Before this patch the old WHERE always
+# forced `lab_id = ?` (only rows of the chosen lab) with no combination with the
+# procedure type, so the catalog could not be restricted to exactly the tests of
+# the selected provider AND the selected type.
 #
 # WHAT THE DIFF DOES
-#  1. Adds a global `AND lab_id IN (?, 0)` to BOTH branches of the search
-#     listing (otype search and favorites/plain search). The `0` keeps rows of
-#     the generic unassigned lab (lab_id = 0, e.g. manual LAB01) visible under
-#     ANY selected lab.
-#  2. When no lab is selected yet (labid = 0 / absent) NO lab clause is emitted:
+#  1. Filters by provider using ONLY procedure_type.lab_id: for a selected lab
+#     (labid > 0) the search is limited to THAT provider's rows exclusively
+#     (strict AND lab_id = ?) — no mixing with the generic unassigned lab.
+#  2. Filters by procedure type using ONLY procedure_type.procedure_type_name
+#     when an otype is selected ('imaging' shows the DIAGNOSTIC IMAGING subtree
+#     via pt.parent as a same-table fallback; other types match rows whose
+#     procedure_type_name equals the requested type). The provider (lab_id) and
+#     the type (procedure_type_name) combine with AND, so picking a provider that
+#     has no items of that type returns an EMPTY result (e.g. Imagen Services
+#     + 'procedure' -> nothing).
+#  3. Legacy rows WITHOUT a loaded procedure_type_name are still shown when they
+#     belong to the selected lab, so nothing is lost.
+#  4. When no lab is selected yet (labid = 0 / absent) NO lab clause is emitted:
 #     the picker shows the full catalog as a fallback until the user picks
 #     "Sending To".
-#  3. Removes the old legacy sub-condition `AND pt.lab_id = ?` from the
-#     procedure_type_name branch (now covered by the IN), so legacy lab_id = 0
-#     rows also stay visible under any selected lab.
-#  4. Groups the imaging `OR pt.parent IN (subtree)` INSIDE the
+#  5. Groups the imaging `OR pt.parent IN (subtree)` INSIDE the
 #     procedure_type_name condition, so the lab_id filter applies via AND to
-#     BOTH routes instead of being escaped by the OR (the previous structure
-#     left the imaging subtree unfiltered).
+#     BOTH routes instead of being escaped by the OR.
+#  6. Favorites (fgp) are left unfiltered by type so custom groups are not
+#     broken, but are still lab-scoped (strict lab_id = ?).
+# The search box (code/name LIKE) and activity = 1 are the native picker filters
+# and are untouched.
 #
 # NOTE: this diff is against the PRISTINE OpenEMR 8.2.0 file and therefore also
 # contains the earlier "otype" patch (search filtered by procedure_type_name,
 # with an imaging DIAGNOSTIC IMAGING-subtree fallback). On sites that already
-# applied that otype version, only the lab-scoping hunks are new.
+# applied that otype version, only the lab-scoping hunk is new.
 # The COMPLETE patched file is available at
 # patches/openemr/interface/orders/find_order_popup.php (production-ready: copy
 # it over interface/orders/find_order_popup.php).
 #
 diff --git a/interface/orders/find_order_popup.php b/interface/orders/find_order_popup.php
-index 267c3fb..6cd9883 100644
+index 267c3fb..d55c26e 100644
 --- a/interface/orders/find_order_popup.php
 +++ b/interface/orders/find_order_popup.php
 @@ -19,6 +19,9 @@ use OpenEMR\Core\Header;
@@ -69,7 +77,7 @@ index 267c3fb..6cd9883 100644
          if (isset($_GET['formid'])) {
              echo '&formid=' . attr_url($_GET['formid']);
          }
-@@ -177,14 +181,56 @@ if (isset($_GET['typeid'])) {
+@@ -177,14 +181,54 @@ if (isset($_GET['typeid'])) {
                          $sub = "OR procedure_type LIKE 'pro'";
                      }
                      $search_term = '%' . $_REQUEST['search_term'] . '%';
@@ -81,12 +89,11 @@ index 267c3fb..6cd9883 100644
 -                        "(procedure_code LIKE ? OR name LIKE ?) " .
 -                        "ORDER BY seq, procedure_code";
 -                    $res = sqlStatement($query, [$labid, $ord, $search_term, $search_term]);
-+                    // Multi-lab scoping: with a lab selected (labid > 0) results are
-+                    // limited to that lab's tests plus the generic unassigned lab
-+                    // (lab_id = 0, e.g. manual LAB01), so the picker never mixes
-+                    // tests from other providers. With labid = 0 / absent (no
-+                    // provider chosen yet) no lab filter is applied at all.
-+                    $labSql = ($labid > 0) ? " AND lab_id IN (?, 0)" : '';
++                    // Provider (lab) scoping: with a lab selected (labid > 0) results
++                    // are limited to THAT provider's tests only — strict, no mixing
++                    // with the generic unassigned lab (lab_id = 0). With labid = 0 /
++                    // absent (no provider chosen yet) no lab filter is applied at all.
++                    $labSql = ($labid > 0) ? " AND lab_id = ?" : '';
 +                    $labParams = ($labid > 0) ? [$labid] : [];
 +                    // The search filters the catalog according to the selected order type
 +                    // (procedure_type_names = procedure_type.procedure_type_name):
@@ -94,11 +101,10 @@ index 267c3fb..6cd9883 100644
 +                    //   - 'laboratory_test'  -> laboratory tests
 +                    //   - 'procedure' and others -> procedures of that type
 +                    // Legacy items WITHOUT a loaded procedure_type_name are still shown
-+                    // with the classic filter by laboratory (lab_id), so nothing is lost.
++                    // when they belong to the selected lab, so nothing is lost.
 +                    // Favorites (fgp) are left unfiltered so custom groups are not broken.
 +                    if ($otype !== '' && $ord === 'ord') {
-+                        // Lab scoping is handled once by $labSql; the legacy branch
-+                        // keeps lab_id = 0 rows visible for any selected lab.
++                        // Lab scoping is handled once by $labSql (strict lab_id = ?).
 +                        // The imaging OR is grouped INSIDE this condition so the
 +                        // lab_id filter applies to both routes (AND, not OR-escape).
 +                        $otypeGroup = "(pt.procedure_type_name = ? OR pt.procedure_type_name IS NULL OR pt.procedure_type_name = '')";

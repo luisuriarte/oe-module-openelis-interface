@@ -181,12 +181,11 @@ if (isset($_GET['typeid'])) {
                         $sub = "OR procedure_type LIKE 'pro'";
                     }
                     $search_term = '%' . $_REQUEST['search_term'] . '%';
-                    // Multi-lab scoping: with a lab selected (labid > 0) results are
-                    // limited to that lab's tests plus the generic unassigned lab
-                    // (lab_id = 0, e.g. manual LAB01), so the picker never mixes
-                    // tests from other providers. With labid = 0 / absent (no
-                    // provider chosen yet) no lab filter is applied at all.
-                    $labSql = ($labid > 0) ? " AND lab_id IN (?, 0)" : '';
+                    // Provider (lab) scoping: with a lab selected (labid > 0) results
+                    // are limited to THAT provider's tests only — strict, no mixing
+                    // with the generic unassigned lab (lab_id = 0). With labid = 0 /
+                    // absent (no provider chosen yet) no lab filter is applied at all.
+                    $labSql = ($labid > 0) ? " AND lab_id = ?" : '';
                     $labParams = ($labid > 0) ? [$labid] : [];
                     // The search filters the catalog according to the selected order type
                     // (procedure_type_names = procedure_type.procedure_type_name):
@@ -194,11 +193,10 @@ if (isset($_GET['typeid'])) {
                     //   - 'laboratory_test'  -> laboratory tests
                     //   - 'procedure' and others -> procedures of that type
                     // Legacy items WITHOUT a loaded procedure_type_name are still shown
-                    // with the classic filter by laboratory (lab_id), so nothing is lost.
+                    // when they belong to the selected lab, so nothing is lost.
                     // Favorites (fgp) are left unfiltered so custom groups are not broken.
                     if ($otype !== '' && $ord === 'ord') {
-                        // Lab scoping is handled once by $labSql; the legacy branch
-                        // keeps lab_id = 0 rows visible for any selected lab.
+                        // Lab scoping is handled once by $labSql (strict lab_id = ?).
                         // The imaging OR is grouped INSIDE this condition so the
                         // lab_id filter applies to both routes (AND, not OR-escape).
                         $otypeGroup = "(pt.procedure_type_name = ? OR pt.procedure_type_name IS NULL OR pt.procedure_type_name = '')";

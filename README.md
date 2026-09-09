@@ -92,7 +92,7 @@ openelis/
 ├── 📂 patches/
 │   └── 📄 common.php.patch.txt           # Patch (8.0.0): "Send to OpenELIS" button
 │   └── 📄 procedure_provider_edit.php.patch.txt  # Patch (8.0.0): catalog credentials in providers form
-│   └── 📄 find_order_popup.php.patch.txt # Patch (8.2.0): multi-lab scoping in the Procedure Picker
+│   └── 📄 find_order_popup.php.patch.txt # Patch (8.2.0): strict per-provider + order-type scoping in the Procedure Picker
 │   └── 📂 openemr/                       # COMPLETE patched files (production-ready)
 │       └── 📂 interface/forms/procedure_order/common.php
 │       └── 📂 interface/orders/procedure_provider_edit.php
