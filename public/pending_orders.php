@@ -98,7 +98,10 @@ $where .= " AND pp.protocol = 'WS'"
     . " AND pp.mod_openelis_catalog_login IS NOT NULL AND pp.mod_openelis_catalog_login != ''";
 
 if ($filter === 'pending') {
-    $where .= " AND po.mod_openelis_sync_status IS NULL AND po.date_transmitted IS NULL";
+    // "Pending" = never synced to OpenELIS, EVEN IF already HL7-transmitted
+    // (date_transmitted). The OpenELIS sync is independent of the HL7 transmit,
+    // so an order transmitted via the native flow still needs its OpenELIS send.
+    $where .= " AND po.mod_openelis_sync_status IS NULL";
 } elseif ($filter === 'sent') {
     $where .= " AND po.mod_openelis_sync_status = 'sent'";
 } elseif ($filter === 'error') {

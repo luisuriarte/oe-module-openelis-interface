@@ -1963,14 +1963,7 @@ $reasonCodeStatii[ReasonStatusCodes::NONE]['description'] = xl("Select a status 
                                         title='<?php echo xla('Click to transmit the order. Order will be saved prior to sending.'); ?>'
                                         onclick='top.restoreSession();transmitting = true;'><?php echo xlt('Transmit Order'); ?>
                                     </button>
-                                    <?php if ($viewmode && empty($row['date_transmitted'])) { ?>
-                                    <a href="<?php echo $GLOBALS['webroot']; ?>/public/modules/openelis/send_order_action.php?order_id=<?php echo attr($formid); ?>"
-                                       class="btn btn-info btn-openelis-send"
-                                       onclick="event.preventDefault(); sendOrderToOpenELIS(this, <?php echo attr($formid); ?>);"
-                                       title="<?php echo xla('Send this order to OpenELIS via FHIR'); ?>">
-                                        <?php echo xlt('Send to OpenELIS'); ?>
-                                    </a>
-                                    <?php } elseif ($viewmode && ($row['mod_openelis_sync_status'] ?? '') === 'sent') { ?>
+                                    <?php if ($viewmode && ($row['mod_openelis_sync_status'] ?? '') === 'sent') { ?>
                                     <button type="button" class="btn btn-outline-info" disabled>
                                         ✓ <?php echo xlt('Sent to OpenELIS'); ?>
                                     </button>
@@ -1980,6 +1973,15 @@ $reasonCodeStatii[ReasonStatusCodes::NONE]['description'] = xl("Select a status 
                                        onclick="event.preventDefault(); sendOrderToOpenELIS(this, <?php echo attr($formid); ?>);"
                                        title="<?php echo xla('Retry sending to OpenELIS'); ?>">
                                         <?php echo xlt('Retry OpenELIS'); ?>
+                                    </a>
+                                    <?php } elseif ($viewmode) { ?>
+                                    <!-- Shown even for HL7-transmitted orders (date_transmitted set):
+                                         the OpenELIS sync is independent of the HL7 transmit. -->
+                                    <a href="<?php echo $GLOBALS['webroot']; ?>/public/modules/openelis/send_order_action.php?order_id=<?php echo attr($formid); ?>"
+                                       class="btn btn-info btn-openelis-send"
+                                       onclick="event.preventDefault(); sendOrderToOpenELIS(this, <?php echo attr($formid); ?>);"
+                                       title="<?php echo xla('Send this order to OpenELIS via FHIR'); ?>">
+                                        <?php echo xlt('Send to OpenELIS'); ?>
                                     </a>
                                     <?php } ?>
                                     <button type="button" class="btn btn-secondary btn-cancel"
