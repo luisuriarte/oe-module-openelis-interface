@@ -754,7 +754,10 @@ if (!empty($row['lab_id'])) {
         // This is for callback by the find-procedure-type popup.
         // Sets both the selected type ID and its descriptive name.
         // Also set diagnosis if supplied in configuration and custom test groups.
-        function set_proc_type(typeid, typename, diagcodes = '', temptype, typetitle, testid, newCnt = 0) {
+        // procLabId (optional): lab_id of the selected procedure_type. When provided
+        // and different from the current form_lab_id, the "Sending To" selector is
+        // updated automatically so the order is sent to the correct provider.
+        function set_proc_type(typeid, typename, diagcodes = '', temptype, typetitle, testid, newCnt = 0, procLabId = 0) {
             let f = document.forms[0];
             let ptvarname = 'form_proc_type[' + gbl_formseq + ']';
             let ptdescname = 'form_proc_type_desc[' + gbl_formseq + ']';
@@ -763,6 +766,30 @@ if (!empty($row['lab_id'])) {
             let ptproccode = 'form_proc_code[' + gbl_formseq + ']';
             let ptproctypename = 'form_proc_order_title[' + gbl_formseq + ']';
             let psc = '';
+
+            // Auto-select the correct lab provider when the selected procedure
+            // belongs to a different lab than the one currently chosen.
+            if (procLabId > 0) {
+                let labSelect = document.getElementById('form_lab_id');
+                if (labSelect && parseInt(labSelect.value) !== procLabId) {
+                    // Check that the target lab option actually exists in the selector.
+                    let targetOption = labSelect.querySelector('option[value="' + procLabId + '"]');
+                    if (targetOption) {
+                        if (viewmode) {
+                            // In viewmode, warn before switching labs (clears the order).
+                            let labName = targetOption.textContent.trim();
+                            if (confirm(<?php echo xlj('The selected procedure belongs to a different lab') ?> + ' (' + labName + '). ' + <?php echo xlj('Switch the sending provider?') ?>)) {
+                                labSelect.value = procLabId;
+                                currentLabId = procLabId;
+                            }
+                        } else {
+                            // On new orders, switch silently.
+                            labSelect.value = procLabId;
+                            currentLabId = procLabId;
+                        }
+                    }
+                }
+            }
 
             f[pttransport].value = temptype;
             f[ptvarname].value = typeid;

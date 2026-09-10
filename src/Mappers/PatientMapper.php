@@ -26,15 +26,23 @@ class PatientMapper
             'gender' => self::mapGender($patientData['sex'] ?? ''),
         ];
 
-        if (!empty($patientData['pubpid'])) {
+        $idValue = !empty($patientData['pubpid']) ? trim((string)$patientData['pubpid']) : trim((string)($patientData['pid'] ?? ''));
+        if ($idValue !== '') {
             $patient['identifier'][] = [
                 'system' => 'http://openelis-global.org/pat_nationalId',
-                'value' => $patientData['pubpid'],
+                'value' => $idValue,
+            ];
+            $patient['identifier'][] = [
+                'system' => 'http://openemr.org/fhir/patient-id',
+                'value' => (string)($patientData['pid'] ?? $idValue),
             ];
         }
 
-        if (!empty($patientData['DOB'])) {
-            $patient['birthDate'] = date('Y-m-d', strtotime($patientData['DOB']));
+        if (!empty($patientData['DOB']) && $patientData['DOB'] !== '0000-00-00') {
+            $time = strtotime($patientData['DOB']);
+            if ($time !== false && $time > 0) {
+                $patient['birthDate'] = date('Y-m-d', $time);
+            }
         }
 
         $addressLines = array_filter([$patientData['street'] ?? '']);

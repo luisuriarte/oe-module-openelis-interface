@@ -42,6 +42,8 @@ if (isset($_GET['typeid'])) {
         $transport = trim($ptrow['transport'] ?? '');
         $testid = trim((string) $ptrow['procedure_code']);
         $proctype_name = trim((string) $ptrow['procedure_type_name']);
+        // Pass lab_id back so common.php can auto-select the correct provider
+        $pt_lab_id = (int)($ptrow['lab_id'] ?? 0);
 
         if ($ptrow['procedure_type'] == 'fgp') {
             $res = sqlStatement("SELECT * FROM procedure_type WHERE parent = ? && procedure_type = 'for' ORDER BY seq, name, procedure_type_id", [$typeid]);
@@ -66,7 +68,7 @@ if (isset($_GET['typeid'])) {
             $t = 0;
             do {
                 if (!isset($grporders[$i]['procedure_type_id'])) {
-                    echo "opener.set_proc_type(" . js_escape($typeid) . ", " . js_escape($name) . ", " . js_escape($codes) . ", " . js_escape($transport) . ", " . js_escape($proctype_name) . ", " . js_escape($testid) . ", '0');\n";
+                    echo "opener.set_proc_type(" . js_escape($typeid) . ", " . js_escape($name) . ", " . js_escape($codes) . ", " . js_escape($transport) . ", " . js_escape($proctype_name) . ", " . js_escape($testid) . ", '0', " . js_escape($pt_lab_id) . ");\n";
                 } else {
                     $t = count($grporders) - $i;
                     $typeid = $grporders[$i]['procedure_type_id'] + 0;
@@ -75,7 +77,9 @@ if (isset($_GET['typeid'])) {
                     $transport = trim((string) $ptrow['transport']);
                     $testid = trim((string) $ptrow['procedure_code']);
                     $proctype_name = trim((string) $ptrow['procedure_type_name']);
-                    echo "opener.set_proc_type(" . js_escape($typeid) . ", " . js_escape($name) . ", " . js_escape($codes) . ", " . js_escape($transport) . ", " . js_escape($proctype_name) . ", " . js_escape($testid) . ", " . js_escape($t) . ");\n";
+                    // For grouped orders, use the lab_id of the parent group row
+                    $grp_lab_id = (int)($grporders[$i]['lab_id'] ?? $pt_lab_id);
+                    echo "opener.set_proc_type(" . js_escape($typeid) . ", " . js_escape($name) . ", " . js_escape($codes) . ", " . js_escape($transport) . ", " . js_escape($proctype_name) . ", " . js_escape($testid) . ", " . js_escape($t) . ", " . js_escape($grp_lab_id) . ");\n";
                 }
                 // This is to generate the "Questions at Order Entry" for the Procedure Order form.
                 // GET parms needed for this are: formid, formseq.

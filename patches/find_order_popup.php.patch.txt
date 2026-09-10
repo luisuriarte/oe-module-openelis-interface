@@ -1,53 +1,9 @@
-# Patch: Strict per-provider scoping in the Procedure Picker (find_order_popup.php)
-#
-# File: interface/orders/find_order_popup.php
-# OpenEMR version: 8.2.0 - ORIGINAL file baseline
-#
-# PREMISE
-# The picker is opened from the Procedure Order form carrying the selected
-# "Sending To" provider in $_GET['labid'] (procedure_providers.ppid, matching
-# procedure_type.lab_id) and the order type in $_REQUEST['otype']
-# (procedure_type.procedure_type_name). Before this patch the old WHERE always
-# forced `lab_id = ?` (only rows of the chosen lab) with no combination with the
-# procedure type, so the catalog could not be restricted to exactly the tests of
-# the selected provider AND the selected type.
-#
-# WHAT THE DIFF DOES
-#  1. Filters by provider using ONLY procedure_type.lab_id: for a selected lab
-#     (labid > 0) the search is limited to THAT provider's rows exclusively
-#     (strict AND lab_id = ?) — no mixing with the generic unassigned lab.
-#  2. Filters by procedure type using ONLY procedure_type.procedure_type_name
-#     when an otype is selected ('imaging' shows the DIAGNOSTIC IMAGING subtree
-#     via pt.parent as a same-table fallback; other types match rows whose
-#     procedure_type_name equals the requested type). The provider (lab_id) and
-#     the type (procedure_type_name) combine with AND, so picking a provider that
-#     has no items of that type returns an EMPTY result (e.g. Imagen Services
-#     + 'procedure' -> nothing).
-#  3. Legacy rows WITHOUT a loaded procedure_type_name are still shown when they
-#     belong to the selected lab, so nothing is lost.
-#  4. When no lab is selected yet (labid = 0 / absent) NO lab clause is emitted:
-#     the picker shows the full catalog as a fallback until the user picks
-#     "Sending To".
-#  5. Groups the imaging `OR pt.parent IN (subtree)` INSIDE the
-#     procedure_type_name condition, so the lab_id filter applies via AND to
-#     BOTH routes instead of being escaped by the OR.
-#  6. Favorites (fgp) are left unfiltered by type so custom groups are not
-#     broken, but are still lab-scoped (strict lab_id = ?).
-# The search box (code/name LIKE) and activity = 1 are the native picker filters
-# and are untouched.
-#
-# NOTE: this diff is against the PRISTINE OpenEMR 8.2.0 file and therefore also
-# contains the earlier "otype" patch (search filtered by procedure_type_name,
-# with an imaging DIAGNOSTIC IMAGING-subtree fallback). On sites that already
-# applied that otype version, only the lab-scoping hunk is new.
-# The COMPLETE patched file is available at
-# patches/openemr/interface/orders/find_order_popup.php (production-ready: copy
-# it over interface/orders/find_order_popup.php).
-#
-diff --git a/interface/orders/find_order_popup.php b/interface/orders/find_order_popup.php
-index 267c3fb..d55c26e 100644
---- a/interface/orders/find_order_popup.php
-+++ b/interface/orders/find_order_popup.php
+warning: in the working copy of 'D:\docs\luis\Documentos\sitios\openemr\desarrollo\openemr-8.2.0\interface\orders\find_order_popup.php', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'd:\docs\luis\Documentos\sitios\openemr\desarrollo\oe-module-openelis-interface\patches\openemr\interface\orders\find_order_popup.php', LF will be replaced by CRLF the next time Git touches it
+diff --git "a/D:\\docs\\luis\\Documentos\\sitios\\openemr\\desarrollo\\openemr-8.2.0\\interface\\orders\\find_order_popup.php" "b/d:\\docs\\luis\\Documentos\\sitios\\openemr\\desarrollo\\oe-module-openelis-interface\\patches\\openemr\\interface\\orders\\find_order_popup.php"
+index 267c3fb..7c4603e 100644
+--- "a/D:\\docs\\luis\\Documentos\\sitios\\openemr\\desarrollo\\openemr-8.2.0\\interface\\orders\\find_order_popup.php"
++++ "b/d:\\docs\\luis\\Documentos\\sitios\\openemr\\desarrollo\\oe-module-openelis-interface\\patches\\openemr\\interface\\orders\\find_order_popup.php"
 @@ -19,6 +19,9 @@ use OpenEMR\Core\Header;
  
  $order = (int) ($_GET['order'] ?? null);
@@ -58,7 +14,36 @@ index 267c3fb..d55c26e 100644
  
  //////////////////////////////////////////////////////////////////////
  // The form was submitted with the selected code type.
-@@ -114,7 +117,8 @@ if (isset($_GET['typeid'])) {
+@@ -39,6 +42,8 @@ if (isset($_GET['typeid'])) {
+         $transport = trim($ptrow['transport'] ?? '');
+         $testid = trim((string) $ptrow['procedure_code']);
+         $proctype_name = trim((string) $ptrow['procedure_type_name']);
++        // Pass lab_id back so common.php can auto-select the correct provider
++        $pt_lab_id = (int)($ptrow['lab_id'] ?? 0);
+ 
+         if ($ptrow['procedure_type'] == 'fgp') {
+             $res = sqlStatement("SELECT * FROM procedure_type WHERE parent = ? && procedure_type = 'for' ORDER BY seq, name, procedure_type_id", [$typeid]);
+@@ -63,7 +68,7 @@ if (isset($_GET['typeid'])) {
+             $t = 0;
+             do {
+                 if (!isset($grporders[$i]['procedure_type_id'])) {
+-                    echo "opener.set_proc_type(" . js_escape($typeid) . ", " . js_escape($name) . ", " . js_escape($codes) . ", " . js_escape($transport) . ", " . js_escape($proctype_name) . ", " . js_escape($testid) . ", '0');\n";
++                    echo "opener.set_proc_type(" . js_escape($typeid) . ", " . js_escape($name) . ", " . js_escape($codes) . ", " . js_escape($transport) . ", " . js_escape($proctype_name) . ", " . js_escape($testid) . ", '0', " . js_escape($pt_lab_id) . ");\n";
+                 } else {
+                     $t = count($grporders) - $i;
+                     $typeid = $grporders[$i]['procedure_type_id'] + 0;
+@@ -72,7 +77,9 @@ if (isset($_GET['typeid'])) {
+                     $transport = trim((string) $ptrow['transport']);
+                     $testid = trim((string) $ptrow['procedure_code']);
+                     $proctype_name = trim((string) $ptrow['procedure_type_name']);
+-                    echo "opener.set_proc_type(" . js_escape($typeid) . ", " . js_escape($name) . ", " . js_escape($codes) . ", " . js_escape($transport) . ", " . js_escape($proctype_name) . ", " . js_escape($testid) . ", " . js_escape($t) . ");\n";
++                    // For grouped orders, use the lab_id of the parent group row
++                    $grp_lab_id = (int)($grporders[$i]['lab_id'] ?? $pt_lab_id);
++                    echo "opener.set_proc_type(" . js_escape($typeid) . ", " . js_escape($name) . ", " . js_escape($codes) . ", " . js_escape($transport) . ", " . js_escape($proctype_name) . ", " . js_escape($testid) . ", " . js_escape($t) . ", " . js_escape($grp_lab_id) . ");\n";
+                 }
+                 // This is to generate the "Questions at Order Entry" for the Procedure Order form.
+                 // GET parms needed for this are: formid, formseq.
+@@ -114,7 +121,8 @@ if (isset($_GET['typeid'])) {
              <?php
              echo "const params = new URLSearchParams({";
              echo "order: " . js_escape($order) . ", ";
@@ -68,7 +53,7 @@ index 267c3fb..d55c26e 100644
              if (isset($_GET['addfav'])) {
                  echo ", addfav: " . js_escape($_GET['addfav']);
              }
-@@ -137,7 +141,7 @@ if (isset($_GET['typeid'])) {
+@@ -137,7 +145,7 @@ if (isset($_GET['typeid'])) {
  <body>
  <div class="container">
      <div class="row">
@@ -77,7 +62,7 @@ index 267c3fb..d55c26e 100644
          if (isset($_GET['formid'])) {
              echo '&formid=' . attr_url($_GET['formid']);
          }
-@@ -177,14 +181,54 @@ if (isset($_GET['typeid'])) {
+@@ -177,14 +185,54 @@ if (isset($_GET['typeid'])) {
                          $sub = "OR procedure_type LIKE 'pro'";
                      }
                      $search_term = '%' . $_REQUEST['search_term'] . '%';
@@ -90,7 +75,7 @@ index 267c3fb..d55c26e 100644
 -                        "ORDER BY seq, procedure_code";
 -                    $res = sqlStatement($query, [$labid, $ord, $search_term, $search_term]);
 +                    // Provider (lab) scoping: with a lab selected (labid > 0) results
-+                    // are limited to THAT provider's tests only — strict, no mixing
++                    // are limited to THAT provider's tests only ÔÇö strict, no mixing
 +                    // with the generic unassigned lab (lab_id = 0). With labid = 0 /
 +                    // absent (no provider chosen yet) no lab filter is applied at all.
 +                    $labSql = ($labid > 0) ? " AND lab_id = ?" : '';

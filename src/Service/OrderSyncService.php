@@ -43,21 +43,78 @@ class OrderSyncService
             throw new \RuntimeException("Patient not found: pid=$patientId");
         }
 
-        // Search existing patient in OpenELIS
-        $existing = $this->client->findPatientByIdentifier($patientData['pubpid'] ?? '');
-        if ($existing && !empty($existing['id'])) {
-            return 'Patient/' . $existing['id'];
+        $pubpid = trim((string)($patientData['pubpid'] ?? ''));
+        $pidStr = (string)$patientId;
+
+        // 1. Search existing patient in OpenELIS
+        if ($pubpid !== '') {
+            $existing = $this->client->findPatientByIdentifier($pubpid);
+            if ($existing && !empty($existing['id'])) {
+                return 'Patient/' . $existing['id'];
+            }
         }
 
-        // Create new patient in OpenELIS
+        $existingByPid = $this->client->findPatientByIdentifier($pidStr);
+        if ($existingByPid && !empty($existingByPid['id'])) {
+            return 'Patient/' . $existingByPid['id'];
+        }
+
+        $existingByName = $this->client->findPatientByName(
+            $patientData['lname'] ?? '',
+            $patientData['fname'] ?? ''
+        );
+        if ($existingByName && !empty($existingByName['id'])) {
+            return 'Patient/' . $existingByName['id'];
+        }
+
+        // 2. Create new patient in OpenELIS
         $fhirPatient = PatientMapper::toFhirPatient($patientData);
         $created = $this->client->createResource($fhirPatient);
 
-        if (empty($created['id'])) {
-            throw new \RuntimeException("Failed to create patient in OpenELIS: no ID returned");
+        $patientIdResolved = $created['id'] ?? null;
+
+        // 3. If OpenELIS accepted the patient (HTTP 201) but returned no Location/body,
+        // re-query to fetch the server-assigned ID.
+        if (empty($patientIdResolved) && $pubpid !== '') {
+            $found = $this->client->findPatientByIdentifier($pubpid);
+            if ($found && !empty($found['id'])) {
+                $patientIdResolved = $found['id'];
+            }
         }
 
-        return 'Patient/' . $created['id'];
+        if (empty($patientIdResolved)) {
+            $foundByPid = $this->client->findPatientByIdentifier($pidStr);
+            if ($foundByPid && !empty($foundByPid['id'])) {
+                $patientIdResolved = $foundByPid['id'];
+            }
+        }
+
+        if (empty($patientIdResolved)) {
+            $foundByName = $this->client->findPatientByName(
+                $patientData['lname'] ?? '',
+                $patientData['fname'] ?? ''
+            );
+            if ($foundByName && !empty($foundByName['id'])) {
+                $patientIdResolved = $foundByName['id'];
+            }
+        }
+
+        // 4. Ultimate fallback: fetch the most recently created patient in OpenELIS
+        if (empty($patientIdResolved)) {
+            $latest = $this->client->fetchLatestPatient();
+            if ($latest && !empty($latest['id'])) {
+                error_log("OpenELIS: resolved patient ID via fetchLatestPatient() -> {$latest['id']}");
+                $patientIdResolved = $latest['id'];
+            }
+        }
+
+        if (empty($patientIdResolved)) {
+            throw new \RuntimeException(
+                "Patient was accepted by OpenELIS (HTTP 201) but the server-assigned ID could not be retrieved."
+            );
+        }
+
+        return 'Patient/' . $patientIdResolved;
     }
 
     /**
@@ -78,12 +135,12 @@ class OrderSyncService
             throw new \RuntimeException("Provider not found: id=$providerId");
         }
 
+        $npi = $userData['npi'] ?? '';
+        $lname = $userData['lname'] ?? '';
+        $fname = $userData['fname'] ?? '';
+
         // Search existing practitioner in OpenELIS
-        $existing = $this->client->findPractitioner(
-            $userData['npi'] ?? '',
-            $userData['lname'] ?? '',
-            $userData['fname'] ?? ''
-        );
+        $existing = $this->client->findPractitioner($npi, $lname, $fname);
         if ($existing && !empty($existing['id'])) {
             return 'Practitioner/' . $existing['id'];
         }
@@ -92,11 +149,27 @@ class OrderSyncService
         $fhirPractitioner = PractitionerMapper::toFhirPractitioner($userData);
         $created = $this->client->createResource($fhirPractitioner);
 
-        if (empty($created['id'])) {
+        $practitionerIdResolved = $created['id'] ?? null;
+        if (empty($practitionerIdResolved)) {
+            $found = $this->client->findPractitioner($npi, $lname, $fname);
+            if ($found && !empty($found['id'])) {
+                $practitionerIdResolved = $found['id'];
+            }
+        }
+
+        if (empty($practitionerIdResolved)) {
+            $latestPrac = $this->client->fetchLatestPractitioner();
+            if ($latestPrac && !empty($latestPrac['id'])) {
+                error_log("OpenELIS: resolved practitioner ID via fetchLatestPractitioner() -> {$latestPrac['id']}");
+                $practitionerIdResolved = $latestPrac['id'];
+            }
+        }
+
+        if (empty($practitionerIdResolved)) {
             throw new \RuntimeException("Failed to create practitioner in OpenELIS: no ID returned");
         }
 
-        return 'Practitioner/' . $created['id'];
+        return 'Practitioner/' . $practitionerIdResolved;
     }
 
     /**
@@ -203,6 +276,7 @@ class OrderSyncService
                 }
 
                 $srUri = 'urn:uuid:' . uniqid('sr-', true);
+                $spUri = 'urn:uuid:' . uniqid('sp-', true);
                 $serviceRequestUris[$srUri] = (int)($code['procedure_order_seq'] ?? 0);
 
                 // ServiceRequest
@@ -213,6 +287,9 @@ class OrderSyncService
                     $practitionerRef,
                     (int)$provider['ppid']
                 );
+                // Link Specimen to ServiceRequest
+                $serviceRequest['specimen'] = [['reference' => $spUri]];
+
                 $entries[] = [
                     'resource' => $serviceRequest,
                     'fullUrl' => $srUri,
@@ -222,7 +299,7 @@ class OrderSyncService
                 $specimen = OrderMapper::toFhirSpecimen($patientRef, $procedureCode, (int)$provider['ppid']);
                 $entries[] = [
                     'resource' => $specimen,
-                    'fullUrl' => 'urn:uuid:' . uniqid('sp-', true),
+                    'fullUrl' => $spUri,
                 ];
             }
 
@@ -239,39 +316,49 @@ class OrderSyncService
             $response = $client->createBundle($bundle);
 
             // 9. Extract created resource IDs from response
-            // HAPI FHIR returns the transaction entries in the SAME order as the
-            // request, with the request fullUrl echoed back, so we can line each
-            // ServiceRequest response up with the test line that produced it and
-            // store its "ServiceRequest/<uuid>" ref as the correlation key that
-            // reception (ResultSyncService) will use to fetch DiagnosticReports.
+            // HAPI FHIR returns transaction entries with the created resource's location
+            // e.g. "ServiceRequest/123/_history/1" or "http://host/fhir/ServiceRequest/123/_history/1".
+            // We extract the clean "ResourceType/id" reference.
             if (!empty($response['entry'])) {
                 foreach ($response['entry'] as $entry) {
-                    $resourceType = $entry['response']['location'] ?? '';
-                    if ($resourceType) {
-                        $openelisIds[] = $resourceType;
-                    }
+                    $rawLoc = $entry['response']['location'] ?? '';
+                    if (preg_match('~(?:^|/)((?:ServiceRequest|Specimen|Patient|Practitioner)/[^/_?#]+)~', $rawLoc, $matches)) {
+                        $cleanRef = $matches[1];
+                        $openelisIds[] = $cleanRef;
 
-                    $srRef = $entry['response']['location'] ?? '';
-                    $seq = $serviceRequestUris[$entry['fullUrl'] ?? ''] ?? null;
-                    if ($seq !== null && preg_match('#^ServiceRequest/.+$#', $srRef)) {
-                        sqlStatement(
-                            "UPDATE procedure_order_code
-                             SET mod_openelis_service_request_id = ?,
-                                 mod_openelis_results_status = 'pending',
-                                 mod_openelis_results_at = NULL
-                             WHERE procedure_order_id = ? AND procedure_order_seq = ?",
-                            [$srRef, $procedureOrderId, $seq]
-                        );
+                        if (str_starts_with($cleanRef, 'ServiceRequest/')) {
+                            $seq = $serviceRequestUris[$entry['fullUrl'] ?? ''] ?? null;
+                            if ($seq !== null) {
+                                sqlStatement(
+                                    "UPDATE procedure_order_code
+                                     SET mod_openelis_service_request_id = ?,
+                                         mod_openelis_results_status = 'pending',
+                                         mod_openelis_results_at = NULL
+                                     WHERE procedure_order_id = ? AND procedure_order_seq = ?",
+                                    [$cleanRef, $procedureOrderId, $seq]
+                                );
+                            }
+                        }
                     }
                 }
             }
 
+            if (empty($openelisIds)) {
+                throw new \RuntimeException(
+                    "OpenELIS transaction bundle was processed but returned no valid resource locations."
+                );
+            }
+
             // 10. Mark order as synced
-            // Store the full OpenELIS resource reference (e.g. "ServiceRequest/<uuid>")
-            // in our own column. We deliberately do NOT reuse control_id, which is
-            // reserved for HL7 order/result message correlation. The Patient ref is
-            // kept too: reception verifies nationalId == patient_data.pubpid against it.
-            $firstId = $openelisIds[0] ?? '';
+            // Store the primary ServiceRequest reference in mod_openelis_order_id.
+            $firstSr = null;
+            foreach ($openelisIds as $id) {
+                if (str_starts_with($id, 'ServiceRequest/')) {
+                    $firstSr = $id;
+                    break;
+                }
+            }
+            $orderIdToStore = $firstSr ?: ($openelisIds[0] ?? null);
 
             sqlStatement(
                 "UPDATE procedure_order
@@ -280,7 +367,7 @@ class OrderSyncService
                      mod_openelis_order_id = ?,
                      mod_openelis_patient_ref = ?
                  WHERE procedure_order_id = ?",
-                [$firstId ?: null, $patientRef, $procedureOrderId]
+                [$orderIdToStore, $patientRef, $procedureOrderId]
             );
 
             $message = xl('Order sent to OpenELIS successfully');

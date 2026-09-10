@@ -99,8 +99,9 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
-// ACL check
-if (!AclMain::aclCheckCore('admin', 'super')) {
+// ACL check: require the same permission as creating/viewing lab orders.
+// 'patients > lab' covers any user who can work with procedure orders.
+if (!AclMain::aclCheckCore('patients', 'lab')) {
     http_response_code(403);
     echo json_encode(['success' => false, 'message' => xl('Access denied')]);
     exit;

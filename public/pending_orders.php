@@ -73,7 +73,8 @@ function oe_module_csrf_collect(string $subject = 'default'): string
     return CsrfUtils::collectCsrfToken($subject);
 }
 
-if (!AclMain::aclCheckCore('admin', 'super')) {
+// 'patients > lab' is the standard OpenEMR permission for lab order management.
+if (!AclMain::aclCheckCore('patients', 'lab')) {
     echo xlt('Access denied');
     exit;
 }

@@ -12,16 +12,69 @@ namespace OpenEMR\Modules\OpenElis\Client;
  */
 class OpenElisApiClient
 {
+    private const DEFAULT_HOST_HEADER = 'elis.origen.ar';
+    private const DEFAULT_ORIGIN = 'https://127.0.0.1:8443';
+    private const FHIR_BASE_PATH = '/OpenELIS-Global/fhir';
+
     private string $baseUrl;
     private string $login;
     private string $password;
+    private string $hostHeader;
 
     public function __construct(string $remoteHost, string $login, string $password)
     {
-        // Normalize: ensure trailing slash
-        $this->baseUrl = rtrim($remoteHost, '/') . '/';
         $this->login = $login;
         $this->password = $password;
+        $this->hostHeader = self::hostHeaderFromRemoteHost($remoteHost);
+        $this->baseUrl = self::buildFhirBaseUrl($remoteHost);
+    }
+
+    /**
+     * Choose the Host header used for Docker routing. When the remote_host
+     * points at a real hostname (not loopback), we honor it; loopback
+     * addresses fall back to the configured site name (elis.origen.ar).
+     */
+    private static function hostHeaderFromRemoteHost(string $remoteHost): string
+    {
+        if (filter_var($remoteHost, FILTER_VALIDATE_URL)) {
+            $host = parse_url($remoteHost, PHP_URL_HOST);
+            if ($host !== false && $host !== '' && !in_array($host, ['127.0.0.1', 'localhost', '::1'], true)) {
+                return $host;
+            }
+        }
+        return self::DEFAULT_HOST_HEADER;
+    }
+
+    /**
+     * Build the FHIR base URL ensuring the '/OpenELIS-Global/fhir/' path is present.
+     */
+    private static function buildFhirBaseUrl(string $remoteHost): string
+    {
+        $remoteHost = trim($remoteHost);
+        if (empty($remoteHost)) {
+            return self::DEFAULT_ORIGIN . self::FHIR_BASE_PATH . '/';
+        }
+
+        // If user already specified a URL containing '/fhir'
+        if (str_contains($remoteHost, '/fhir')) {
+            return rtrim($remoteHost, '/') . '/';
+        }
+
+        if (filter_var($remoteHost, FILTER_VALIDATE_URL)) {
+            $p = parse_url($remoteHost);
+            $scheme = $p['scheme'] ?? 'https';
+            $host = $p['host'] ?? '127.0.0.1';
+            $port = isset($p['port']) ? ':' . $p['port'] : '';
+            $path = trim($p['path'] ?? '', '/');
+
+            if (str_contains($path, 'OpenELIS-Global')) {
+                return $scheme . '://' . $host . $port . '/' . $path . '/fhir/';
+            }
+
+            return $scheme . '://' . $host . $port . self::FHIR_BASE_PATH . '/';
+        }
+
+        return rtrim($remoteHost, '/') . self::FHIR_BASE_PATH . '/';
     }
 
     /**
@@ -181,21 +234,136 @@ class OpenElisApiClient
      */
     public function findPatientByIdentifier(string $pubpid): ?array
     {
+        $pubpid = trim($pubpid);
+        if ($pubpid === '') {
+            return null;
+        }
+
+        // Try qualified identifier system first
         $system = 'http://openelis-global.org/pat_nationalId';
         $response = $this->request('GET', 'Patient', [
             'identifier' => $system . '|' . $pubpid,
         ]);
+        error_log("OpenELIS findPatientByIdentifier($system|$pubpid) HTTP {$response['status']}: " . substr($response['body'], 0, 250));
 
-        if ($response['status'] >= 400) {
+        if ($response['status'] < 400) {
+            $bundle = json_decode($response['body'], true);
+            if (is_array($bundle) && !empty($bundle['entry'][0]['resource'])) {
+                return $bundle['entry'][0]['resource'];
+            }
+        }
+
+        // Try OpenEMR system identifier
+        $oeSystem = 'http://openemr.org/fhir/patient-id';
+        $response = $this->request('GET', 'Patient', [
+            'identifier' => $oeSystem . '|' . $pubpid,
+        ]);
+        if ($response['status'] < 400) {
+            $bundle = json_decode($response['body'], true);
+            if (is_array($bundle) && !empty($bundle['entry'][0]['resource'])) {
+                return $bundle['entry'][0]['resource'];
+            }
+        }
+
+        // Fallback: search identifier without system
+        $response = $this->request('GET', 'Patient', [
+            'identifier' => $pubpid,
+        ]);
+        error_log("OpenELIS findPatientByIdentifier(raw=$pubpid) HTTP {$response['status']}: " . substr($response['body'], 0, 250));
+
+        if ($response['status'] < 400) {
+            $bundle = json_decode($response['body'], true);
+            if (is_array($bundle) && !empty($bundle['entry'][0]['resource'])) {
+                return $bundle['entry'][0]['resource'];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Find a Patient in OpenELIS by name.
+     */
+    public function findPatientByName(string $family, string $given): ?array
+    {
+        $family = trim($family);
+        $given = trim($given);
+        if ($family === '' && $given === '') {
             return null;
         }
 
-        $bundle = json_decode($response['body'], true);
-        if (!is_array($bundle) || ($bundle['total'] ?? 0) === 0) {
-            return null;
+        $params = [];
+        if ($family !== '') {
+            $params['family'] = $family;
+        }
+        if ($given !== '') {
+            $params['given'] = $given;
         }
 
-        return $bundle['entry'][0]['resource'] ?? null;
+        $response = $this->request('GET', 'Patient', $params);
+        error_log("OpenELIS findPatientByName(family=$family, given=$given) HTTP {$response['status']}: " . substr($response['body'], 0, 250));
+
+        if ($response['status'] < 400) {
+            $bundle = json_decode($response['body'], true);
+            if (is_array($bundle) && !empty($bundle['entry'][0]['resource'])) {
+                return $bundle['entry'][0]['resource'];
+            }
+        }
+
+        // Fallback: search general 'name'
+        $fullName = trim($family . ' ' . $given);
+        $response = $this->request('GET', 'Patient', ['name' => $fullName]);
+        error_log("OpenELIS findPatientByName(name=$fullName) HTTP {$response['status']}: " . substr($response['body'], 0, 250));
+
+        if ($response['status'] < 400) {
+            $bundle = json_decode($response['body'], true);
+            if (is_array($bundle) && !empty($bundle['entry'][0]['resource'])) {
+                return $bundle['entry'][0]['resource'];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Fetch the most recently created or updated Patient in OpenELIS.
+     */
+    public function fetchLatestPatient(): ?array
+    {
+        $response = $this->request('GET', 'Patient', [
+            '_count' => 1,
+            '_sort' => '-_lastUpdated',
+        ]);
+        error_log("OpenELIS fetchLatestPatient() HTTP {$response['status']}: " . substr($response['body'], 0, 250));
+
+        if ($response['status'] < 400) {
+            $bundle = json_decode($response['body'], true);
+            if (is_array($bundle) && !empty($bundle['entry'][0]['resource'])) {
+                return $bundle['entry'][0]['resource'];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Fetch the most recently created or updated Practitioner in OpenELIS.
+     */
+    public function fetchLatestPractitioner(): ?array
+    {
+        $response = $this->request('GET', 'Practitioner', [
+            '_count' => 1,
+            '_sort' => '-_lastUpdated',
+        ]);
+
+        if ($response['status'] < 400) {
+            $bundle = json_decode($response['body'], true);
+            if (is_array($bundle) && !empty($bundle['entry'][0]['resource'])) {
+                return $bundle['entry'][0]['resource'];
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -254,15 +422,27 @@ class OpenElisApiClient
         }
 
         // Try to extract ID from Location header first, then from response body
-        $id = self::extractIdFromLocation($response['headers']['location'] ?? '');
+        $id = self::extractIdFromLocation($response['headers']['location'] ?? '', $resourceType);
         if (!$id) {
             $body = json_decode($response['body'], true);
             $id = $body['id'] ?? null;
         }
 
-        if ($id) {
-            $resource['id'] = $id;
+        if (empty($id)) {
+            // When status is 201/200, return the resource without id rather than failing immediately,
+            // allowing the caller to resolve the id via search if Location was omitted by proxy/server.
+            if ($response['status'] === 200 || $response['status'] === 201) {
+                return $resource;
+            }
+
+            error_log("OpenElisApiClient::createResource({$resourceType}) failed to find ID. Status: {$response['status']}, Location: " . ($response['headers']['location'] ?? 'none') . ", Headers: " . json_encode($response['headers']));
+            throw new OpenElisApiException(
+                $response['status'],
+                "Failed to obtain ID for created {$resourceType}. Location: " . ($response['headers']['location'] ?? 'none') . ". Server response: " . substr($response['body'], 0, 300)
+            );
         }
+
+        $resource['id'] = $id;
 
         return $resource;
     }
@@ -281,7 +461,15 @@ class OpenElisApiClient
             throw new OpenElisApiException($response['status'], $response['body']);
         }
 
-        return json_decode($response['body'], true) ?? [];
+        $decoded = json_decode($response['body'], true);
+        if (!is_array($decoded) || empty($decoded['resourceType']) || $decoded['resourceType'] !== 'Bundle') {
+            throw new OpenElisApiException(
+                $response['status'],
+                "Invalid response from OpenELIS: expected FHIR Bundle, got: " . substr($response['body'], 0, 300)
+            );
+        }
+
+        return $decoded;
     }
 
     /**
@@ -301,25 +489,27 @@ class OpenElisApiClient
         }
 
         $ch = curl_init();
+
         curl_setopt_array($ch, [
-            CURLOPT_URL => $url,
+            CURLOPT_URL            => $url,
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => 30,
-            CURLOPT_CUSTOMREQUEST => $method,
+            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_CUSTOMREQUEST  => $method,
 
             // Basic Auth
             CURLOPT_USERPWD => $this->login . ':' . $this->password,
 
-            // Headers
+            // Headers — Host is derived from remote_host, not hardcoded
             CURLOPT_HTTPHEADER => [
-                'Host: elis.origen.ar',
+                'Host: ' . $this->hostHeader,
                 'Content-Type: application/fhir+json',
                 'Accept: application/fhir+json',
+                'Prefer: return=representation',
             ],
 
-            // SSL: disabled because the FHIR endpoint runs on 127.0.0.1:8443
-            // with a self-signed certificate. This is loopback-only traffic
-            // on the same server — it is never exposed to the public internet.
+            // SSL: disabled because the FHIR endpoint commonly runs on loopback
+            // with a self-signed certificate (127.0.0.1:8443). Traffic never
+            // leaves the server.
             CURLOPT_SSL_VERIFYPEER => false,
             CURLOPT_SSL_VERIFYHOST => false,
 
@@ -342,13 +532,29 @@ class OpenElisApiClient
         $headerStr = substr($response, 0, $headerSize);
         $responseBody = substr($response, $headerSize);
 
-        // Parse response headers
+        // Parse response headers (handling CRLF, LF, or CR)
         $headers = [];
-        foreach (explode("\r\n", trim($headerStr)) as $line) {
+        foreach (preg_split('/\r\n|\r|\n/', trim($headerStr)) as $line) {
             if (str_contains($line, ':')) {
                 [$key, $value] = explode(':', $line, 2);
                 $headers[strtolower(trim($key))] = trim($value);
             }
+        }
+
+        // Direct regex fallback for Location header across the entire header string
+        if (empty($headers['location'])) {
+            if (preg_match('/^location:\s*(.+)$/im', $headerStr, $locMatch)) {
+                $headers['location'] = trim($locMatch[1]);
+            }
+        }
+
+        // HTTP 3xx redirect indicates an issue with the base URL or proxy configuration
+        if ($statusCode >= 300 && $statusCode < 400) {
+            $redirectUrl = $headers['location'] ?? 'unknown';
+            throw new OpenElisApiException(
+                $statusCode,
+                "Unexpected HTTP redirect ($statusCode) to '$redirectUrl'. Check OpenELIS FHIR endpoint ($url)."
+            );
         }
 
         return [
@@ -358,15 +564,24 @@ class OpenElisApiClient
         ];
     }
 
-    private static function extractIdFromLocation(?string $location): ?string
+    public static function extractIdFromLocation(?string $location, string $expectedResourceType = ''): ?string
     {
         if (empty($location)) {
             return null;
         }
 
-        // Location header format: .../ResourceType/uuid
-        $parts = explode('/', rtrim($location, '/'));
-        $last = end($parts);
-        return !empty($last) ? $last : null;
+        $clean = '/' . ltrim($location, '/');
+        if ($expectedResourceType !== '') {
+            if (preg_match('~/' . preg_quote($expectedResourceType, '~') . '/([^/_?#]+)~', $clean, $m)) {
+                return $m[1];
+            }
+            return null;
+        }
+
+        if (preg_match('~/([A-Z][a-zA-Z]+)/([^/_?#]+)~', $clean, $m)) {
+            return $m[2];
+        }
+
+        return null;
     }
 }

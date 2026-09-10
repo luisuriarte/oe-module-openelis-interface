@@ -1,122 +1,181 @@
-# Patch: Add "Send to OpenELIS" button to procedure_order form
-#
-# File: interface/forms/procedure_order/common.php
-# OpenEMR version: 8.0.0 (tag v8_0_0) — ORIGINAL file
-#
-# This patch adds a "Send to OpenELIS" button in the order view page,
-# alongside the existing Save/Transmit/Cancel buttons.
-#
-# INSTRUCTIONS:
-# 1. Backup your common.php file
-# 2. Open interface/forms/procedure_order/common.php
-# 3. Confirm these are ALREADY present (they are required by this patch):
-#    - use OpenEMR\Common\Csrf\CsrfUtils;                       (line ~29, present)
-#    - $row, $formid, $viewmode, $GLOBALS['webroot']            (already in scope)
-#    NOTE: OpenEMR 8.0.0 does NOT define a $session variable here; the CSRF
-#    token is collected with the plain CsrfUtils::collectCsrfToken() call.
-# 4. Search for the marker line (see below)
-# 5. Insert the code block after it
-# 6. Insert the JS function before the closing </script> tag
-# 7. Test by opening an existing order in view mode
-#
-# IMPORTANT: This patch uses OpenEMR's native CSRF (CsrfUtils::collectCsrfToken
-# with the default 'default' subject). It does NOT use any module helper
-# function. The module endpoint send_order_action.php verifies the token with
-# the same default subject, so they stay in sync.
-#
-# IMPORTANT (deployment): The OpenELIS web scripts (send_order_action.php,
-# pending_orders.php, admin_mapping.php) are served from <openemr_root>/public/
-# in production. Copy the module's public/ contents there, under the module
-# subfolder:
-#   mkdir -p <openemr_root>/public/modules/openelis
-#   cp <module>/public/*.php  <openemr_root>/public/modules/openelis/
-# The URLs below point to {webroot}/public/modules/openelis/ accordingly.
-
-## ============================================================
-## STEP 1: Find this block (around line 1919-1923):
-## ============================================================
-#
-#                                     <button type="submit" class="btn btn-primary btn-transmit"
-#                                         name='bn_xmit' value="transmit"
-#                                         title='<?php echo xla('Click to transmit the order. Order will be saved prior to sending.'); ?>'
-#                                         onclick='top.restoreSession();transmitting = true;'><?php echo xlt('Transmit Order'); ?>
-#                                     </button>
-#
-## ============================================================
-## STEP 2: INSERT the following block AFTER the Transmit button:
-## ============================================================
-#
-#                                     <?php if ($viewmode && empty($row['date_transmitted'])) { ?>
-#                                     <a href="<?php echo $GLOBALS['webroot']; ?>/public/modules/openelis/send_order_action.php?order_id=<?php echo attr($formid); ?>"
-#                                        class="btn btn-info btn-openelis-send"
-#                                        onclick="event.preventDefault(); sendOrderToOpenELIS(this, <?php echo attr($formid); ?>);"
-#                                        title="<?php echo xla('Send this order to OpenELIS via FHIR'); ?>">
-#                                         <?php echo xlt('Send to OpenELIS'); ?>
-#                                     </a>
-#                                     <?php } elseif ($viewmode && ($row['mod_openelis_sync_status'] ?? '') === 'sent') { ?>
-#                                     <button type="button" class="btn btn-outline-info" disabled>
-#                                         ✓ <?php echo xlt('Sent to OpenELIS'); ?>
-#                                     </button>
-#                                     <?php } elseif ($viewmode && ($row['mod_openelis_sync_status'] ?? '') === 'error') { ?>
-#                                     <a href="<?php echo $GLOBALS['webroot']; ?>/public/modules/openelis/send_order_action.php?order_id=<?php echo attr($formid); ?>"
-#                                        class="btn btn-warning btn-openelis-send"
-#                                        onclick="event.preventDefault(); sendOrderToOpenELIS(this, <?php echo attr($formid); ?>);"
-#                                        title="<?php echo xla('Retry sending to OpenELIS'); ?>">
-#                                         <?php echo xlt('Retry OpenELIS'); ?>
-#                                     </a>
-#                                     <?php } ?>
-#
-## ============================================================
-## STEP 3: Add this JavaScript function before the </script> tag
-## (after the validate() function, around line 1150-1213):
-## ============================================================
-#
-#         function sendOrderToOpenELIS(btn, orderId) {
-#             if (!confirm(<?php echo xlj("Send this order to OpenELIS?"); ?>)) return;
-#
-#             var origText = btn.innerHTML;
-#             btn.disabled = true;
-#             btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> ' + <?php echo xlj("Sending..."); ?>;
-#
-#             var formData = new FormData();
-#             formData.append('order_id', orderId);
-#             formData.append('csrf_token_form', <?php echo js_escape(CsrfUtils::collectCsrfToken()); ?>);
-#             formData.append('action', 'send');
-#
-#             fetch(<?php echo js_escape($GLOBALS['webroot'] . '/public/modules/openelis/send_order_action.php'); ?>, {
-#                 method: 'POST',
-#                 body: formData,
-#                 credentials: 'same-origin'
-#             })
-#             .then(function(r) {
-#                 if (!r.ok) {
-#                     return r.json().catch(function() { throw new Error('HTTP ' + r.status); });
-#                 }
-#                 return r.json();
-#             })
-#             .then(function(data) {
-#                 if (data.success) {
-#                     btn.outerHTML = '<button type="button" class="btn btn-outline-info" disabled>✓ ' + <?php echo xlj("Sent to OpenELIS"); ?> + '</button>';
-#                     alert(data.message);
-#                 } else {
-#                     alert(<?php echo xlj("Error:"); ?> + ' ' + data.message);
-#                     btn.disabled = false;
-#                     btn.innerHTML = origText;
-#                 }
-#             })
-#             .catch(function(err) {
-#                 alert('Error de envío: ' + (err && err.message ? err.message : 'desconocido'));
-#                 console.error('OpenELIS send error:', err);
-#                 btn.disabled = false;
-#                 btn.innerHTML = origText;
-#             });
-#         }
-#
-## ============================================================
-## NOTE FOR NEWER/CUSTOM FILES
-## ============================================================
-## In OpenEMR 8.2.0+ and in custom files the CSRF token is usually collected as
-## CsrfUtils::collectCsrfToken(session: $session) with a SessionWrapperFactory
-## variable. If your file defines $session, replace the two
-## CsrfUtils::collectCsrfToken() calls in STEP 3 with
-## CsrfUtils::collectCsrfToken(session: $session) for consistency.
+warning: in the working copy of 'D:\docs\luis\Documentos\sitios\openemr\desarrollo\openemr-8.2.0\interface\forms\procedure_order\common.php', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'd:\docs\luis\Documentos\sitios\openemr\desarrollo\oe-module-openelis-interface\patches\openemr\interface\forms\procedure_order\common.php', LF will be replaced by CRLF the next time Git touches it
+diff --git "a/D:\\docs\\luis\\Documentos\\sitios\\openemr\\desarrollo\\openemr-8.2.0\\interface\\forms\\procedure_order\\common.php" "b/d:\\docs\\luis\\Documentos\\sitios\\openemr\\desarrollo\\oe-module-openelis-interface\\patches\\openemr\\interface\\forms\\procedure_order\\common.php"
+index 6052405..4de5a98 100644
+--- "a/D:\\docs\\luis\\Documentos\\sitios\\openemr\\desarrollo\\openemr-8.2.0\\interface\\forms\\procedure_order\\common.php"
++++ "b/d:\\docs\\luis\\Documentos\\sitios\\openemr\\desarrollo\\oe-module-openelis-interface\\patches\\openemr\\interface\\forms\\procedure_order\\common.php"
+@@ -203,7 +203,10 @@ if (($_POST['bn_save'] ?? null) || !empty($_POST['bn_xmit']) || !empty($_POST['b
+         "scheduled_start = ?, " .
+         "scheduled_end = ?, " .
+         "performer_type = ?, " .
+-        "location_id = ?";
++        "location_id = ?, " .
++        // Imaging request context
++        "requesting_service = ?, " .
++        "anatomical_region = ?";
+ 
+     $set_array = [
+         empty($_POST['form_date_ordered']) ? null : $_POST['form_date_ordered'],
+@@ -233,6 +236,9 @@ if (($_POST['bn_save'] ?? null) || !empty($_POST['bn_xmit']) || !empty($_POST['b
+         empty($_POST['form_scheduled_end']) ? null : $_POST['form_scheduled_end'],
+         trim($_POST['form_performer_type'] ?? ''),
+         (int)($_POST['form_location_id'] ?? 0),
++        // Imaging request context (option_id from the list_options dropdowns)
++        empty($_POST['form_requesting_service']) ? null : $_POST['form_requesting_service'],
++        empty($_POST['form_anatomical_region']) ? null : $_POST['form_anatomical_region'],
+     ];
+ 
+     require_once(__DIR__ . "/procedure_order_save_functions.php");
+@@ -731,11 +737,15 @@ if (!empty($row['lab_id'])) {
+ 
+             let title = <?php echo xlj("Find Procedure Order"); ?>;
+             // This replaces the previous search for an easier/faster order picker tool.
++            // The order type (procedure_order_type) is sent to the popup so that,
++            // when it is 'imaging', only the imaging catalog is shown.
++            let otype = (typeof f.procedure_type_names !== 'undefined') ? f.procedure_type_names.value : '';
+             const params = new URLSearchParams({
+                 formid: <?php echo js_escape($formid); ?>,
+                 formseq: formseq,
+                 labid: f.form_lab_id.value,
+-                order: f[ptvarname].value
++                order: f[ptvarname].value,
++                otype: otype
+             });
+             dlgopen('../../orders/find_order_popup.php?' + params,
+                 '_blank', 850, 500, '', title);
+@@ -744,7 +754,10 @@ if (!empty($row['lab_id'])) {
+         // This is for callback by the find-procedure-type popup.
+         // Sets both the selected type ID and its descriptive name.
+         // Also set diagnosis if supplied in configuration and custom test groups.
+-        function set_proc_type(typeid, typename, diagcodes = '', temptype, typetitle, testid, newCnt = 0) {
++        // procLabId (optional): lab_id of the selected procedure_type. When provided
++        // and different from the current form_lab_id, the "Sending To" selector is
++        // updated automatically so the order is sent to the correct provider.
++        function set_proc_type(typeid, typename, diagcodes = '', temptype, typetitle, testid, newCnt = 0, procLabId = 0) {
+             let f = document.forms[0];
+             let ptvarname = 'form_proc_type[' + gbl_formseq + ']';
+             let ptdescname = 'form_proc_type_desc[' + gbl_formseq + ']';
+@@ -754,6 +767,30 @@ if (!empty($row['lab_id'])) {
+             let ptproctypename = 'form_proc_order_title[' + gbl_formseq + ']';
+             let psc = '';
+ 
++            // Auto-select the correct lab provider when the selected procedure
++            // belongs to a different lab than the one currently chosen.
++            if (procLabId > 0) {
++                let labSelect = document.getElementById('form_lab_id');
++                if (labSelect && parseInt(labSelect.value) !== procLabId) {
++                    // Check that the target lab option actually exists in the selector.
++                    let targetOption = labSelect.querySelector('option[value="' + procLabId + '"]');
++                    if (targetOption) {
++                        if (viewmode) {
++                            // In viewmode, warn before switching labs (clears the order).
++                            let labName = targetOption.textContent.trim();
++                            if (confirm(<?php echo xlj('The selected procedure belongs to a different lab') ?> + ' (' + labName + '). ' + <?php echo xlj('Switch the sending provider?') ?>)) {
++                                labSelect.value = procLabId;
++                                currentLabId = procLabId;
++                            }
++                        } else {
++                            // On new orders, switch silently.
++                            labSelect.value = procLabId;
++                            currentLabId = procLabId;
++                        }
++                    }
++                }
++            }
++
+             f[pttransport].value = temptype;
+             f[ptvarname].value = typeid;
+             f[ptdescname].value = typename;
+@@ -1191,6 +1228,47 @@ if (!empty($row['lab_id'])) {
+             $(".wait").removeClass('d-none');
+             return true;
+         }
++
++        function sendOrderToOpenELIS(btn, orderId) {
++            if (!confirm(<?php echo xlj("Send this order to OpenELIS?"); ?>)) return;
++
++            var origText = btn.innerHTML;
++            btn.disabled = true;
++            btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> ' + <?php echo xlj("Sending..."); ?>;
++
++            var formData = new FormData();
++            formData.append('order_id', orderId);
++            formData.append('csrf_token_form', <?php echo js_escape(CsrfUtils::collectCsrfToken(session: $session)); ?>);
++            formData.append('action', 'send');
++
++            fetch(<?php echo js_escape($GLOBALS['webroot'] . '/public/modules/openelis/send_order_action.php'); ?>, {
++                method: 'POST',
++                body: formData,
++                credentials: 'same-origin'
++            })
++            .then(function(r) {
++                if (!r.ok) {
++                    return r.json().catch(function() { throw new Error('HTTP ' + r.status); });
++                }
++                return r.json();
++            })
++            .then(function(data) {
++                if (data.success) {
++                    btn.outerHTML = '<button type="button" class="btn btn-outline-info" disabled>Ô£ô ' + <?php echo xlj("Sent to OpenELIS"); ?> + '</button>';
++                    alert(data.message);
++                } else {
++                    alert(<?php echo xlj("Error:"); ?> + ' ' + data.message);
++                    btn.disabled = false;
++                    btn.innerHTML = origText;
++                }
++            })
++            .catch(function(err) {
++                alert('Error de env├¡o: ' + (err && err.message ? err.message : 'desconocido'));
++                console.error('OpenELIS send error:', err);
++                btn.disabled = false;
++                btn.innerHTML = origText;
++            });
++        }
+     </script>
+     <style>
+       @media only screen and (max-width: 768px) {
+@@ -1542,6 +1620,16 @@ $reasonCodeStatii[ReasonStatusCodes::NONE]['description'] = xl("Select a status
+                             </div>
+                             <div class="clearfix"></div>
+                         </div>
++                        <div class="form-group form-row">
++                            <div class="col-md-6">
++                                <label for="form_requesting_service" class="col-form-label"><?php echo xlt('Requesting Service'); ?></label>
++                                <?php generate_form_field(array('data_type' => 1, 'field_id' => 'requesting_service', 'list_id' => 'imaging_report_services', 'empty_title' => '-- Select Service --'), $row['requesting_service'] ?? ''); ?>
++                            </div>
++                            <div class="col-md-6">
++                                <label for="form_anatomical_region" class="col-form-label"><?php echo xlt('Anatomic Region'); ?></label>
++                                <?php generate_form_field(array('data_type' => 1, 'field_id' => 'anatomical_region', 'list_id' => 'imaging_report_anatomy', 'empty_title' => '-- Select Region --'), $row['anatomical_region'] ?? ''); ?>
++                            </div>
++                        </div>
+                         <div class="form-group form-row">
+                             <div class="col-md-6">
+                                 <label for='form_clinical_hx' class='col-form-label'><?php echo xlt('Clinical History'); ?></label>
+@@ -1902,6 +1990,27 @@ $reasonCodeStatii[ReasonStatusCodes::NONE]['description'] = xl("Select a status
+                                         title='<?php echo xla('Click to transmit the order. Order will be saved prior to sending.'); ?>'
+                                         onclick='top.restoreSession();transmitting = true;'><?php echo xlt('Transmit Order'); ?>
+                                     </button>
++                                    <?php if ($viewmode && ($row['mod_openelis_sync_status'] ?? '') === 'sent') { ?>
++                                    <button type="button" class="btn btn-outline-info" disabled>
++                                        Ô£ô <?php echo xlt('Sent to OpenELIS'); ?>
++                                    </button>
++                                    <?php } elseif ($viewmode && ($row['mod_openelis_sync_status'] ?? '') === 'error') { ?>
++                                    <a href="<?php echo $GLOBALS['webroot']; ?>/public/modules/openelis/send_order_action.php?order_id=<?php echo attr($formid); ?>"
++                                       class="btn btn-warning btn-openelis-send"
++                                       onclick="event.preventDefault(); sendOrderToOpenELIS(this, <?php echo attr($formid); ?>);"
++                                       title="<?php echo xla('Retry sending to OpenELIS'); ?>">
++                                        <?php echo xlt('Retry OpenELIS'); ?>
++                                    </a>
++                                    <?php } elseif ($viewmode) { ?>
++                                    <!-- Shown even for HL7-transmitted orders (date_transmitted set):
++                                         the OpenELIS sync is independent of the HL7 transmit. -->
++                                    <a href="<?php echo $GLOBALS['webroot']; ?>/public/modules/openelis/send_order_action.php?order_id=<?php echo attr($formid); ?>"
++                                       class="btn btn-info btn-openelis-send"
++                                       onclick="event.preventDefault(); sendOrderToOpenELIS(this, <?php echo attr($formid); ?>);"
++                                       title="<?php echo xla('Send this order to OpenELIS via FHIR'); ?>">
++                                        <?php echo xlt('Send to OpenELIS'); ?>
++                                    </a>
++                                    <?php } ?>
+                                     <button type="button" class="btn btn-secondary btn-cancel"
+                                         onclick="top.restoreSession();location='<?php echo OEGlobalsBag::getInstance()->get('form_exit_url'); ?>'"><?php echo xlt('Cancel/Exit'); ?>
+                                     </button>
