@@ -23,11 +23,12 @@ class PractitionerMapper
             ],
         ];
 
-        if (!empty($userData['npi'])) {
+        $identifierValue = !empty($userData['npi']) ? (string)$userData['npi'] : (string)($userData['id'] ?? '');
+        if ($identifierValue !== '') {
             $practitioner['identifier'] = [
                 [
-                    'system' => 'http://hl7.org/fhir/sid/us-npi',
-                    'value' => $userData['npi'],
+                    'system' => !empty($userData['npi']) ? 'http://hl7.org/fhir/sid/us-npi' : 'http://openemr.org/fhir/practitioner-id',
+                    'value' => $identifierValue,
                 ],
             ];
         }

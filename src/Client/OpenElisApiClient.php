@@ -367,6 +367,82 @@ class OpenElisApiClient
     }
 
     /**
+     * Fetch the most recently created or updated ServiceRequest in OpenELIS, optionally scoped to a patient.
+     */
+    public function fetchLatestServiceRequest(?string $patientRef = null): ?array
+    {
+        $params = [
+            '_count' => 1,
+            '_sort' => '-_lastUpdated',
+        ];
+        if (!empty($patientRef)) {
+            $params['subject'] = $patientRef;
+        }
+
+        $response = $this->request('GET', 'ServiceRequest', $params);
+        if ($response['status'] < 400) {
+            $bundle = json_decode($response['body'], true);
+            if (is_array($bundle) && !empty($bundle['entry'][0]['resource'])) {
+                return $bundle['entry'][0]['resource'];
+            }
+        }
+
+        // Fallback without subject filter if subject search wasn't supported
+        if (!empty($patientRef)) {
+            $response = $this->request('GET', 'ServiceRequest', [
+                '_count' => 1,
+                '_sort' => '-_lastUpdated',
+            ]);
+            if ($response['status'] < 400) {
+                $bundle = json_decode($response['body'], true);
+                if (is_array($bundle) && !empty($bundle['entry'][0]['resource'])) {
+                    return $bundle['entry'][0]['resource'];
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Fetch the most recently created or updated Specimen in OpenELIS, optionally scoped to a patient.
+     */
+    public function fetchLatestSpecimen(?string $patientRef = null): ?array
+    {
+        $params = [
+            '_count' => 1,
+            '_sort' => '-_lastUpdated',
+        ];
+        if (!empty($patientRef)) {
+            $params['subject'] = $patientRef;
+        }
+
+        $response = $this->request('GET', 'Specimen', $params);
+        if ($response['status'] < 400) {
+            $bundle = json_decode($response['body'], true);
+            if (is_array($bundle) && !empty($bundle['entry'][0]['resource'])) {
+                return $bundle['entry'][0]['resource'];
+            }
+        }
+
+        // Fallback without subject filter
+        if (!empty($patientRef)) {
+            $response = $this->request('GET', 'Specimen', [
+                '_count' => 1,
+                '_sort' => '-_lastUpdated',
+            ]);
+            if ($response['status'] < 400) {
+                $bundle = json_decode($response['body'], true);
+                if (is_array($bundle) && !empty($bundle['entry'][0]['resource'])) {
+                    return $bundle['entry'][0]['resource'];
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Find a Practitioner in OpenELIS by NPI or name.
      *
      * @param string|null $npi   NPI number (preferred lookup)
@@ -555,6 +631,10 @@ class OpenElisApiClient
                 $statusCode,
                 "Unexpected HTTP redirect ($statusCode) to '$redirectUrl'. Check OpenELIS FHIR endpoint ($url)."
             );
+        }
+
+        if ($statusCode >= 400) {
+            error_log("OpenELIS request $method $url failed (HTTP $statusCode): " . substr($responseBody, 0, 1000));
         }
 
         return [

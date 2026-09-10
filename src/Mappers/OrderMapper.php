@@ -32,7 +32,7 @@ class OrderMapper
         $resource = [
             'resourceType' => 'ServiceRequest',
             'status' => 'active',
-            'intent' => 'original-order',
+            'intent' => 'order',
             'priority' => self::mapPriority($procedureOrder['order_priority'] ?? ''),
             'code' => self::buildCodeConcept($mapping, $orderCode['procedure_name'] ?? ''),
             'subject' => ['reference' => $openelisPatientRef],

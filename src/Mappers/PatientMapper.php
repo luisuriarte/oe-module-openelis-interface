@@ -39,9 +39,9 @@ class PatientMapper
         }
 
         if (!empty($patientData['DOB']) && $patientData['DOB'] !== '0000-00-00') {
-            $time = strtotime($patientData['DOB']);
-            if ($time !== false && $time > 0) {
-                $patient['birthDate'] = date('Y-m-d', $time);
+            $dob = substr(trim($patientData['DOB']), 0, 10);
+            if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $dob) && $dob !== '0000-00-00') {
+                $patient['birthDate'] = $dob;
             }
         }
 

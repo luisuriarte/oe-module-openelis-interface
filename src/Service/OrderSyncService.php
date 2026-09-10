@@ -275,11 +275,28 @@ class OrderSyncService
                     continue;
                 }
 
-                $srUri = 'urn:uuid:' . uniqid('sr-', true);
-                $spUri = 'urn:uuid:' . uniqid('sp-', true);
-                $serviceRequestUris[$srUri] = (int)($code['procedure_order_seq'] ?? 0);
+                $seq = (int)($code['procedure_order_seq'] ?? 0);
 
-                // ServiceRequest
+                // 1. Create Specimen in OpenELIS
+                $specimen = OrderMapper::toFhirSpecimen($patientRef, $procedureCode, (int)$provider['ppid']);
+                try {
+                    $createdSpecimen = $client->createResource($specimen);
+                    $specimenId = $createdSpecimen['id'] ?? null;
+                    if (empty($specimenId)) {
+                        $latestSp = $client->fetchLatestSpecimen($patientRef);
+                        $specimenId = $latestSp['id'] ?? null;
+                    }
+                } catch (\Exception $e) {
+                    error_log("OpenELIS sync: Specimen creation notice for '$procedureCode': " . $e->getMessage());
+                    $specimenId = null;
+                }
+
+                $specimenRef = !empty($specimenId) ? 'Specimen/' . $specimenId : null;
+                if ($specimenRef) {
+                    $openelisIds[] = $specimenRef;
+                }
+
+                // 2. Build and create ServiceRequest in OpenELIS
                 $serviceRequest = OrderMapper::toFhirServiceRequest(
                     $order,
                     $code,
@@ -287,66 +304,38 @@ class OrderSyncService
                     $practitionerRef,
                     (int)$provider['ppid']
                 );
-                // Link Specimen to ServiceRequest
-                $serviceRequest['specimen'] = [['reference' => $spUri]];
+                if ($specimenRef) {
+                    $serviceRequest['specimen'] = [['reference' => $specimenRef]];
+                }
 
-                $entries[] = [
-                    'resource' => $serviceRequest,
-                    'fullUrl' => $srUri,
-                ];
+                $createdSr = $client->createResource($serviceRequest);
+                $srId = $createdSr['id'] ?? null;
+                if (empty($srId)) {
+                    $latestSr = $client->fetchLatestServiceRequest($patientRef);
+                    $srId = $latestSr['id'] ?? null;
+                }
 
-                // Specimen
-                $specimen = OrderMapper::toFhirSpecimen($patientRef, $procedureCode, (int)$provider['ppid']);
-                $entries[] = [
-                    'resource' => $specimen,
-                    'fullUrl' => $spUri,
-                ];
-            }
+                if (!empty($srId)) {
+                    $srRef = 'ServiceRequest/' . $srId;
+                    $openelisIds[] = $srRef;
 
-            if (empty($entries)) {
-                return [
-                    'success' => false,
-                    'message' => xl('None of the tests have code mappings configured. Please configure code mappings first.'),
-                    'openelis_ids' => [],
-                ];
-            }
-
-            // 8. Build and send Transaction Bundle
-            $bundle = OrderMapper::buildTransactionBundle($entries);
-            $response = $client->createBundle($bundle);
-
-            // 9. Extract created resource IDs from response
-            // HAPI FHIR returns transaction entries with the created resource's location
-            // e.g. "ServiceRequest/123/_history/1" or "http://host/fhir/ServiceRequest/123/_history/1".
-            // We extract the clean "ResourceType/id" reference.
-            if (!empty($response['entry'])) {
-                foreach ($response['entry'] as $entry) {
-                    $rawLoc = $entry['response']['location'] ?? '';
-                    if (preg_match('~(?:^|/)((?:ServiceRequest|Specimen|Patient|Practitioner)/[^/_?#]+)~', $rawLoc, $matches)) {
-                        $cleanRef = $matches[1];
-                        $openelisIds[] = $cleanRef;
-
-                        if (str_starts_with($cleanRef, 'ServiceRequest/')) {
-                            $seq = $serviceRequestUris[$entry['fullUrl'] ?? ''] ?? null;
-                            if ($seq !== null) {
-                                sqlStatement(
-                                    "UPDATE procedure_order_code
-                                     SET mod_openelis_service_request_id = ?,
-                                         mod_openelis_results_status = 'pending',
-                                         mod_openelis_results_at = NULL
-                                     WHERE procedure_order_id = ? AND procedure_order_seq = ?",
-                                    [$cleanRef, $procedureOrderId, $seq]
-                                );
-                            }
-                        }
-                    }
+                    sqlStatement(
+                        "UPDATE procedure_order_code
+                         SET mod_openelis_service_request_id = ?,
+                             mod_openelis_results_status = 'pending',
+                             mod_openelis_results_at = NULL
+                         WHERE procedure_order_id = ? AND procedure_order_seq = ?",
+                        [$srRef, $procedureOrderId, $seq]
+                    );
                 }
             }
 
             if (empty($openelisIds)) {
-                throw new \RuntimeException(
-                    "OpenELIS transaction bundle was processed but returned no valid resource locations."
-                );
+                return [
+                    'success' => false,
+                    'message' => xl('None of the tests could be sent to OpenELIS. Please check code mappings and OpenELIS connection.'),
+                    'openelis_ids' => [],
+                ];
             }
 
             // 10. Mark order as synced
@@ -391,9 +380,15 @@ class OrderSyncService
                 [$procedureOrderId]
             );
 
+            $detail = OpenElisApiException::parseOutcomeDetail($e->getResponseBody());
+            $errorMsg = xl('Error communicating with OpenELIS') . ' (HTTP ' . $e->getHttpStatus() . ')';
+            if ($detail !== '') {
+                $errorMsg .= ': ' . $detail;
+            }
+
             return [
                 'success' => false,
-                'message' => xl('Error communicating with OpenELIS') . ' (HTTP ' . $e->getHttpStatus() . ')',
+                'message' => $errorMsg,
                 'openelis_ids' => [],
             ];
         } catch (\Exception $e) {

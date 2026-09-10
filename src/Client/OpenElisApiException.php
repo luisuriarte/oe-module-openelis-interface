@@ -12,8 +12,34 @@ class OpenElisApiException extends \RuntimeException
         $this->httpStatus = $httpStatus;
         $this->responseBody = $responseBody;
 
-        $message = "OpenELIS API error (HTTP $httpStatus): " . substr($responseBody, 0, 500);
+        $detail = self::parseOutcomeDetail($responseBody);
+        $message = "OpenELIS API error (HTTP $httpStatus)" . ($detail !== '' ? ": $detail" : '');
         parent::__construct($message, $httpStatus, $previous);
+    }
+
+    public static function parseOutcomeDetail(string $responseBody): string
+    {
+        $body = trim($responseBody);
+        if ($body === '') {
+            return '';
+        }
+
+        $json = json_decode($body, true);
+        if (is_array($json) && ($json['resourceType'] ?? '') === 'OperationOutcome') {
+            $issues = [];
+            foreach ($json['issue'] ?? [] as $issue) {
+                if (!empty($issue['diagnostics'])) {
+                    $issues[] = $issue['diagnostics'];
+                } elseif (!empty($issue['details']['text'])) {
+                    $issues[] = $issue['details']['text'];
+                }
+            }
+            if (!empty($issues)) {
+                return implode('; ', $issues);
+            }
+        }
+
+        return substr(strip_tags($body), 0, 300);
     }
 
     public function getHttpStatus(): int
