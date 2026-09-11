@@ -483,15 +483,27 @@ class OpenElisApiClient
     }
 
     /**
-     * Create or update a FHIR resource via POST.
+     * Create or update a FHIR resource via POST (or PUT when $resourceId given).
      *
-     * @param array $resource  FHIR resource (must include 'resourceType')
-     * @return array           The created/updated resource with server-assigned 'id'
+     * OpenELIS's EMR-LIS importer assumes remote resources carry UUID logical
+     * IDs (DBOrderPersister does UUID.fromString(remotePatient.id)), but HAPI
+     * assigns sequential ids on plain POST. Passing $resourceId forces a PUT
+     * to /ResourceType/<uuid>, which HAPI honors (idempotent create-or-update).
+     *
+     * @param array       $resource     FHIR resource (must include 'resourceType')
+     * @param string|null $resourceId   Optional explicit logical id (PUT)
+     * @return array                    The created/updated resource with 'id'
      */
-    public function createResource(array $resource): array
+    public function createResource(array $resource, ?string $resourceId = null): array
     {
         $resourceType = $resource['resourceType'];
-        $response = $this->request('POST', $resourceType, [], $resource);
+
+        if ($resourceId !== null) {
+            $resource['id'] = $resourceId;
+            $response = $this->request('PUT', $resourceType . '/' . $resourceId, [], $resource);
+        } else {
+            $response = $this->request('POST', $resourceType, [], $resource);
+        }
 
         if ($response['status'] >= 400) {
             throw new OpenElisApiException($response['status'], $response['body']);

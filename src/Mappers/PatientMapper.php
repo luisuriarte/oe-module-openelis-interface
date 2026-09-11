@@ -23,18 +23,34 @@ class PatientMapper
                     'given' => array_filter([$patientData['fname'] ?? '']),
                 ],
             ],
-            'gender' => self::mapGender($patientData['sex'] ?? ''),
         ];
 
-        $idValue = !empty($patientData['pubpid']) ? trim((string)$patientData['pubpid']) : trim((string)($patientData['pid'] ?? ''));
-        if ($idValue !== '') {
+        // mapGender() must run before identifiers so the gender field is set.
+        $patient['gender'] = self::mapGender($patientData['sex'] ?? '');
+
+        $pid = trim((string)($patientData['pid'] ?? ''));
+        $pubpid = trim((string)($patientData['pubpid'] ?? ''));
+        if ($pubpid === '') {
+            $pubpid = $pid;
+        }
+
+        if ($pid !== '') {
+            // OpenELIS "Identificador Único de Salud" (identity type ST) = OpenEMR pid.
             $patient['identifier'][] = [
-                'system' => 'http://openelis-global.org/pat_nationalId',
-                'value' => $idValue,
+                'system' => 'http://openelis-global.org/pat_stNumber',
+                'value' => $pid,
             ];
             $patient['identifier'][] = [
                 'system' => 'http://openemr.org/fhir/patient-id',
-                'value' => (string)($patientData['pid'] ?? $idValue),
+                'value' => $pid,
+            ];
+        }
+
+        if ($pubpid !== '') {
+            // OpenELIS "ID Nacional" = OpenEMR pubpid.
+            $patient['identifier'][] = [
+                'system' => 'http://openelis-global.org/pat_nationalId',
+                'value' => $pubpid,
             ];
         }
 
@@ -80,8 +96,8 @@ class PatientMapper
     {
         $sex = strtoupper(trim($sex));
         return match ($sex) {
-            'M' => 'male',
-            'F' => 'female',
+            'M', 'MALE', 'MASCULINO', 'H', 'HOMBRE', 'VARON', 'V' => 'male',
+            'F', 'FEMALE', 'FEMENINO', 'FEMENINA', 'MUJER' => 'female',
             default => 'unknown',
         };
     }

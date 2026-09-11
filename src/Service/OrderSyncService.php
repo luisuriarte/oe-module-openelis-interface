@@ -47,66 +47,48 @@ class OrderSyncService
         $pidStr = (string)$patientId;
 
         // 1. Search existing patient in OpenELIS
+        //    OpenEMR sync uses a deterministic UUID as the OpenELIS logical id
+        //    (see below). If the patient was already synced with that UUID we
+        //    reuse it; anything else found by identifier (e.g. a HAPI-assigned
+        //    sequential id like Patient/104) is ignored because OpenELIS's
+        //    EMR-LIS importer cannot downstream a non-UUID logical id.
         if ($pubpid !== '') {
             $existing = $this->client->findPatientByIdentifier($pubpid);
-            if ($existing && !empty($existing['id'])) {
+            if ($existing && !empty($existing['id']) && self::isUuid($existing['id'])) {
                 return 'Patient/' . $existing['id'];
             }
         }
 
         $existingByPid = $this->client->findPatientByIdentifier($pidStr);
-        if ($existingByPid && !empty($existingByPid['id'])) {
+        if ($existingByPid && !empty($existingByPid['id']) && self::isUuid($existingByPid['id'])) {
             return 'Patient/' . $existingByPid['id'];
         }
 
-        $existingByName = $this->client->findPatientByName(
-            $patientData['lname'] ?? '',
-            $patientData['fname'] ?? ''
-        );
-        if ($existingByName && !empty($existingByName['id'])) {
-            return 'Patient/' . $existingByName['id'];
-        }
-
-        // 2. Create new patient in OpenELIS
+        // 2. Build the Patient and force a deterministic UUID logical id via
+        //    PUT. OpenELIS's TaskInterpreterImpl/DBOrderPersister parse the
+        //    remote Patient id with UUID.fromString(), so HAPI sequential ids
+        //    (from POST) cannot be imported. A deterministic UUID keeps the
+        //    id stable across resends (idempotent PUT).
+        $patientUuid = self::uuidV5('6ba7b810-9dad-11d1-80b4-00c04fd430c8', 'openemr-patient-' . $patientId);
         $fhirPatient = PatientMapper::toFhirPatient($patientData);
-        $created = $this->client->createResource($fhirPatient);
+        $fhirPatient['id'] = $patientUuid;
 
-        $patientIdResolved = $created['id'] ?? null;
+        // Include the OpenELIS pat_guid identifier on every sync. The EMR-LIS
+        // importer (TaskInterpreterImpl) maps this to MessagePatient.guid, and
+        // DBOrderPersister dedups patients via getPatientForGuid() — a stable
+        // GUID means re-imports UPDATE the existing OpenELIS patient instead of
+        // creating a duplicate row (the externalId-based fallback is unreliable
+        // because OpenELIS's subscriber adds it asynchronously, so the first
+        // poll often sees a patient without it).
+        $fhirPatient['identifier'][] = [
+            'system' => 'http://openelis-global.org/pat_guid',
+            'value' => $patientUuid,
+        ];
 
-        // 3. If OpenELIS accepted the patient (HTTP 201) but returned no Location/body,
-        // re-query to fetch the server-assigned ID.
-        if (empty($patientIdResolved) && $pubpid !== '') {
-            $found = $this->client->findPatientByIdentifier($pubpid);
-            if ($found && !empty($found['id'])) {
-                $patientIdResolved = $found['id'];
-            }
-        }
+        // 3. Create (PUT) the patient in OpenELIS under the deterministic UUID.
+        $created = $this->client->createResource($fhirPatient, $patientUuid);
 
-        if (empty($patientIdResolved)) {
-            $foundByPid = $this->client->findPatientByIdentifier($pidStr);
-            if ($foundByPid && !empty($foundByPid['id'])) {
-                $patientIdResolved = $foundByPid['id'];
-            }
-        }
-
-        if (empty($patientIdResolved)) {
-            $foundByName = $this->client->findPatientByName(
-                $patientData['lname'] ?? '',
-                $patientData['fname'] ?? ''
-            );
-            if ($foundByName && !empty($foundByName['id'])) {
-                $patientIdResolved = $foundByName['id'];
-            }
-        }
-
-        // 4. Ultimate fallback: fetch the most recently created patient in OpenELIS
-        if (empty($patientIdResolved)) {
-            $latest = $this->client->fetchLatestPatient();
-            if ($latest && !empty($latest['id'])) {
-                error_log("OpenELIS: resolved patient ID via fetchLatestPatient() -> {$latest['id']}");
-                $patientIdResolved = $latest['id'];
-            }
-        }
+        $patientIdResolved = $created['id'] ?? $patientUuid;
 
         if (empty($patientIdResolved)) {
             throw new \RuntimeException(
@@ -115,6 +97,47 @@ class OrderSyncService
         }
 
         return 'Patient/' . $patientIdResolved;
+    }
+
+    /**
+     * Deterministic RFC 4122 UUIDv5 from a name in a namespace (PHP-compatible,
+     * no external uuid extension required). Used so OpenELIS FHIR resources get
+     * stable, importer-compatible UUID logical ids.
+     */
+    private static function uuidV5(string $namespaceUuid, string $name): string
+    {
+        // Convert namespace uuid (hex) to binary
+        $nhex = str_replace('-', '', $namespaceUuid);
+        $nbytes = '';
+        for ($i = 0; $i < 16; $i++) {
+            $nbytes .= chr((int)hexdec(substr($nhex, $i * 2, 2)));
+        }
+
+        // Hash the namespace + name with sha1
+        $hash = sha1($nbytes . $name, true);
+
+        // Set version and variant bits
+        $hash[6] = chr((ord($hash[6]) & 0x0f) | 0x50); // version 5
+        $hash[8] = chr((ord($hash[8]) & 0x3f) | 0x80); // variant RFC 4122
+
+        // Format as uuid
+        return sprintf(
+            '%08s-%04s-%04s-%04s-%012s',
+            bin2hex(substr($hash, 0, 4)),
+            bin2hex(substr($hash, 4, 2)),
+            bin2hex(substr($hash, 6, 2)),
+            bin2hex(substr($hash, 8, 2)),
+            bin2hex(substr($hash, 10, 6))
+        );
+    }
+
+    /**
+     * True when the given FHIR logical id is a UUID (OpenELIS importer
+     * requirement), false for HAPI sequential ids like "104".
+     */
+    private static function isUuid(string $id): bool
+    {
+        return (bool)preg_match('/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/', $id);
     }
 
     /**

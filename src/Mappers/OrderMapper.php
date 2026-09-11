@@ -39,6 +39,20 @@ class OrderMapper
             'requester' => ['reference' => $openelisPractitionerRef],
         ];
 
+        // OpenELIS uses ServiceRequest.identifier[0].value as the referring
+        // order number (TaskInterpreterImpl.extractOrderInformation). Without
+        // it the imported order lands as NonConforming instead of Entered.
+        $referringOrderNumber = trim((string)($procedureOrder['control_id'] ?? ''));
+        if ($referringOrderNumber === '') {
+            $referringOrderNumber = (string)$procedureOrder['procedure_order_id'];
+        }
+        $resource['identifier'] = [
+            [
+                'system' => 'http://openemr.org/fhir/order-id',
+                'value' => $referringOrderNumber,
+            ],
+        ];
+
         if (!empty($procedureOrder['date_ordered'])) {
             $resource['authoredOn'] = date('Y-m-d\TH:i:s', strtotime($procedureOrder['date_ordered']));
         }
