@@ -108,6 +108,11 @@ ALTER TABLE `procedure_order` ADD COLUMN `mod_openelis_order_id` VARCHAR(64) DEF
     COMMENT 'OpenELIS ServiceRequest ID returned after order transmission';
 #EndIf
 
+#IfMissingColumn procedure_order mod_openelis_task_id
+ALTER TABLE `procedure_order` ADD COLUMN `mod_openelis_task_id` VARCHAR(64) DEFAULT NULL
+    COMMENT 'OpenELIS Task resource ref ("Task/<uuid>") for this order; the FHIR resource OpenELIS polls to surface the order in the Electronic Orders queue';
+#EndIf
+
 #IfMissingColumn procedure_order mod_openelis_patient_ref
 ALTER TABLE `procedure_order` ADD COLUMN `mod_openelis_patient_ref` VARCHAR(64) DEFAULT NULL
     COMMENT 'OpenELIS Patient resource ref ("Patient/<uuid>") returned when the order was sent; used to correlate and verify results on reception';

@@ -88,6 +88,50 @@ class OrderMapper
     }
 
     /**
+     * Maps a list of created ServiceRequest references to a FHIR R4 Task
+     * resource (EMR-LIS workflow container).
+     *
+     * OpenELIS surfaces inbound lab orders by polling the remote source FHIR
+     * for Task resources with status="requested" whose owner matches the
+     * configured remote store identifier
+     * (org.openelisglobal.remote.source.identifier). Without the Task the
+     * ServiceRequests stay in the FHIR store but never reach the Electronic
+     * Orders queue, so we must publish them together.
+     *
+     * @param array       $serviceRequestRefs  e.g. ["ServiceRequest/123", ...]
+     * @param string      $openelisPatientRef  e.g. "Patient/<uuid>"
+     * @param string      $openelisOwnerRef    e.g. "Practitioner/<uuid>"
+     * @param string|null $authoredOn          ISO-8601 datetime (date_ordered)
+     * @return array FHIR Task resource
+     */
+    public static function toFhirTask(
+        array $serviceRequestRefs,
+        string $openelisPatientRef,
+        string $openelisOwnerRef,
+        ?string $authoredOn = null
+    ): array {
+        $basedOn = [];
+        foreach ($serviceRequestRefs as $ref) {
+            $basedOn[] = ['reference' => $ref, 'type' => 'ServiceRequest'];
+        }
+
+        $task = [
+            'resourceType' => 'Task',
+            'status' => 'requested',
+            'intent' => 'order',
+            'basedOn' => $basedOn,
+            'for' => ['reference' => $openelisPatientRef],
+            'owner' => ['reference' => $openelisOwnerRef],
+        ];
+
+        if (!empty($authoredOn)) {
+            $task['authoredOn'] = date('Y-m-d\TH:i:s', strtotime($authoredOn));
+        }
+
+        return $task;
+    }
+
+    /**
      * Builds a FHIR Transaction Bundle from arrays of resources.
      *
      * @param array $entries  Array of ['resource' => [...], 'fullUrl' => '...']

@@ -400,6 +400,49 @@ foreach ($procedureCodes as $code) {
 
 ---
 
+## 📤 Envío de órdenes (OpenEMR → OpenELIS)
+
+1. `send_order_action.php?action=send` llama a `OrderSyncService::sendOrderToOpenElis()`:
+   - sincroniza el paciente y el médico que ordena (Patient / Practitioner);
+   - por cada línea de prueba crea un **Specimen** y un **ServiceRequest** (con
+     `code.system = http://openelis-global.org/testId`, resuelto a través de
+     `mod_openelis_code_mapping`) en el store FHIR co-residente de OpenELIS;
+   - **publica un `Task`** (`status=requested`, `intent=order`,
+     `basedOn` → los ServiceRequest creados, `for` → el Patient,
+     `owner` → el Practitioner que ordena). Este es el recurso que OpenELIS
+     sondea para mostrar la orden en la cola de **Electronic Orders**: sin él,
+     el ServiceRequest queda dormido y nunca se importa como eOrder.
+   - guarda las referencias en la orden: `mod_openelis_order_id` (primer ServiceRequest),
+     `mod_openelis_task_id` (Task), `mod_openelis_patient_ref` (Patient).
+2. La orden queda marcada `mod_openelis_sync_status = 'sent'`. Si los ServiceRequest
+   se crearon pero el Task falló, el status queda `'error'` y la respuesta
+   informa que el Task es obligatorio.
+
+### Configuración del lado de OpenELIS (necesaria para EMR-LIS import)
+
+La importación depende de propiedades de OpenELIS (no de la UI — Spring ignora
+los cambios de la UI hasta reiniciar el webapp). En `common.properties` (montado
+como secret Docker, p. ej. `/run/secrets/common.properties`) definí al menos:
+
+```properties
+# Desde dónde sondea órdenes entrantes. El módulo publica todo (ServiceRequest + Task)
+# en el mismo store FHIR co-residente de OpenELIS, así que es la misma base:
+org.openelisglobal.remote.source.uri=http://127.0.0.1:8081/fhir/
+org.openelisglobal.remote.source.updateStatus=true
+# Filtro de owner para el sondeo de Tasks: debe coincidir con la ref Practitioner que
+# el módulo crea/sincroniza para el proveedor que ordena (Practitioner/<uuid>).
+# Para encontrarlo: GET <uri>/Practitioner?identifier=<npi>
+org.openelisglobal.remote.source.identifier=Practitioner/<uuid-del-que-ordena>
+org.openelisglobal.task.useBasedOn=true
+# Recursos suscriptos (el Task es el esencial):
+org.openelisglobal.fhir.subscriber.resources=Task,Patient,ServiceRequest,DiagnosticReport,Observation,Specimen,Practitioner,Encounter
+```
+
+Después de guardar, reiniciar el webapp de OpenELIS y habilitar
+**External orders** en Administración → External Orders.
+
+---
+
 ## 📥 Recepción de resultados (laboratorio OpenELIS → OpenEMR)
 
 Los resultados se traen **bajo demanda** (botones) — aún no hay sondeo automático.

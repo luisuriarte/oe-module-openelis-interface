@@ -181,8 +181,10 @@ class OrderSyncService
      * 3. Sync patient to OpenELIS
      * 4. Sync practitioner to OpenELIS
      * 5. Build ServiceRequest + Specimen per test (skipping unmapped codes)
-     * 6. Send as FHIR Transaction Bundle
+     * 6. Create Specimen + ServiceRequest resources in the OpenELIS FHIR store
      * 7. Update procedure_order with sync status
+     * 8. Publish a Task (status=requested) wrapping every ServiceRequest —
+     *    the EMR-LIS container OpenELIS polls to import the order.
      *
      * @param int $procedureOrderId  procedure_order.procedure_order_id
      * @return array  ['success' => bool, 'message' => string, 'openelis_ids' => array]
@@ -257,6 +259,7 @@ class OrderSyncService
             $skippedCodes = [];
             $openelisIds = [];
             $serviceRequestUris = []; // urn:uuid => procedure_order_seq, to correlate the response back to each test line
+            $serviceRequestRefs = []; // "ServiceRequest/<uuid>" refs to attach to the EMR-LIS Task
 
             foreach ($codes as $code) {
                 $procedureCode = $code['procedure_code'] ?? '';
@@ -318,6 +321,7 @@ class OrderSyncService
                 if (!empty($srId)) {
                     $srRef = 'ServiceRequest/' . $srId;
                     $openelisIds[] = $srRef;
+                    $serviceRequestRefs[] = $srRef;
 
                     sqlStatement(
                         "UPDATE procedure_order_code
@@ -327,6 +331,33 @@ class OrderSyncService
                          WHERE procedure_order_id = ? AND procedure_order_seq = ?",
                         [$srRef, $procedureOrderId, $seq]
                     );
+                }
+            }
+
+            // 8. Publish the EMR-LIS Task container for this order. OpenELIS
+            // surfaces incoming lab orders by polling the remote source for
+            // Task resources (status=requested, owner matching
+            // org.openelisglobal.remote.source.identifier), so without the
+            // Task the ServiceRequests above would sit in the FHIR store but
+            // never appear in the Electronic Orders queue.
+            $taskRef = null;
+            if (!empty($serviceRequestRefs)) {
+                try {
+                    $task = OrderMapper::toFhirTask(
+                        $serviceRequestRefs,
+                        $patientRef,
+                        $practitionerRef,
+                        $order['date_ordered'] ?? null
+                    );
+                    $createdTask = $client->createResource($task);
+                    $taskId = $createdTask['id'] ?? null;
+                    if (!empty($taskId)) {
+                        $taskRef = 'Task/' . $taskId;
+                        $openelisIds[] = $taskRef;
+                    }
+                } catch (\Exception $e) {
+                    error_log("OpenELIS sync: Task creation notice for order #$procedureOrderId: " . $e->getMessage());
+                    $taskRef = null;
                 }
             }
 
@@ -352,14 +383,23 @@ class OrderSyncService
             sqlStatement(
                 "UPDATE procedure_order
                  SET date_transmitted = NOW(),
-                     mod_openelis_sync_status = 'sent',
+                     mod_openelis_sync_status = ?,
                      mod_openelis_order_id = ?,
-                     mod_openelis_patient_ref = ?
+                     mod_openelis_patient_ref = ?,
+                     mod_openelis_task_id = ?
                  WHERE procedure_order_id = ?",
-                [$orderIdToStore, $patientRef, $procedureOrderId]
+                [$taskRef ? 'sent' : 'error', $orderIdToStore, $patientRef, $taskRef, $procedureOrderId]
             );
 
-            $message = xl('Order sent to OpenELIS successfully');
+            if (!$taskRef) {
+                return [
+                    'success' => false,
+                    'message' => xl('ServiceRequests were created in OpenELIS but the Task could not be published. OpenELIS requires the Task to import the order into Electronic Orders.'),
+                    'openelis_ids' => $openelisIds,
+                ];
+            }
+
+            $message = xl('Order sent to OpenELIS successfully') . " ($taskRef)";
             if (!empty($skippedCodes)) {
                 $message .= '. ' . xl('Skipped') . ': ' . implode(', ', $skippedCodes);
             }
