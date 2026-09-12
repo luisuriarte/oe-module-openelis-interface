@@ -35,9 +35,10 @@ class PatientMapper
         }
 
         if ($pid !== '') {
-            // OpenELIS "Identificador Único de Salud" (identity type ST) = OpenEMR pid.
+            // OpenELIS "Identificador único de salud" (identity type SUBJECT,
+            // PatientInfoForm.subjectNumber) = OpenEMR pid.
             $patient['identifier'][] = [
-                'system' => 'http://openelis-global.org/pat_stNumber',
+                'system' => 'http://openelis-global.org/pat_subjectNumber',
                 'value' => $pid,
             ];
             $patient['identifier'][] = [

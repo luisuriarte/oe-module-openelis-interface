@@ -143,6 +143,26 @@ $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $page_unmapped = max(1, (int)($_GET['page_unmapped'] ?? 1));
 $page_mapped = max(1, (int)($_GET['page_mapped'] ?? 1));
 
+// ── Target lab provider ────────────────────────────────────────────────
+// Mappings are scoped per lab (mod_openelis_code_mapping.provider_id =
+// procedure_providers.ppid). The catalog import writes provider-specific rows
+// (codes like OE4-T6, provider_id=4) and those are the ones in effect at order
+// time (CodeMappingService prefers the exact provider over the legacy
+// provider_id=0 rows). Editing must target the same provider or the LOINC /
+// SNOMED / units changes silently go to a row that is never used.
+$providers = [];
+$rsP = sqlStatement(
+    "SELECT pd.ppid, pd.name FROM procedure_providers pd
+     JOIN users u ON u.id = pd.ppid WHERE pd.active = 1 ORDER BY pd.name"
+);
+while ($rowP = sqlFetchArray($rsP)) {
+    $providers[] = ['ppid' => (int)$rowP['ppid'], 'name' => (string)$rowP['name']];
+}
+$currentProvider = isset($_GET['provider']) ? (int)$_GET['provider'] : 0;
+if ($currentProvider === 0 && count($providers) > 0) {
+    $currentProvider = $providers[0]['ppid'];
+}
+
 // ── Process POST actions ────────────────────────────────────────────────
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -161,29 +181,67 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $snomedSpecimen = trim($_POST['snomed_specimen'] ?? '');
         $snomedFinding = trim($_POST['snomed_finding'] ?? '');
         $units = trim($_POST['units'] ?? '');
+        $providerId = isset($_POST['provider_id']) ? (int)$_POST['provider_id'] : $currentProvider;
+        $mappingId = isset($_POST['mapping_id']) ? (int)$_POST['mapping_id'] : 0;
 
         if ($procedureCode !== '' && $elisTestId !== '') {
-            $sql = "INSERT INTO mod_openelis_code_mapping
-                        (openemr_procedure_code, openemr_procedure_name, openelis_test_id, openelis_test_name,
-                         loinc_code, snomed_specimen, snomed_finding, units, is_active)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
-                    ON DUPLICATE KEY UPDATE
-                        openemr_procedure_name = VALUES(openemr_procedure_name),
-                        openelis_test_id = VALUES(openelis_test_id),
-                        openelis_test_name = VALUES(openelis_test_name),
-                        loinc_code = VALUES(loinc_code),
-                        snomed_specimen = VALUES(snomed_specimen),
-                        snomed_finding = VALUES(snomed_finding),
-                        units = VALUES(units),
-                        is_active = 1";
-            sqlStatement($sql, [
-                $procedureCode, $procedureName, $elisTestId, $elisTestName,
-                $loincCode ?: null, $snomedSpecimen ?: null, $snomedFinding ?: null, $units ?: null
-            ]);
+            // Editing an existing configured row keeps its provider_id and id.
+            if ($mappingId > 0) {
+                $sql = "UPDATE mod_openelis_code_mapping SET
+                            openemr_procedure_name = ?,
+                            openelis_test_id = ?,
+                            openelis_test_name = ?,
+                            loinc_code = ?,
+                            snomed_specimen = ?,
+                            snomed_finding = ?,
+                            units = ?,
+                            is_active = 1
+                        WHERE id = ?";
+                sqlStatement($sql, [
+                    $procedureName, $elisTestId, $elisTestName,
+                    $loincCode ?: null, $snomedSpecimen ?: null, $snomedFinding ?: null, $units ?: null,
+                    $mappingId
+                ]);
+            } else {
+                // New assignment: keep the row scoped to the selected provider.
+                $existing = sqlQuery(
+                    "SELECT id FROM mod_openelis_code_mapping
+                     WHERE openemr_procedure_code = ? AND provider_id = ? LIMIT 1",
+                    [$procedureCode, $providerId]
+                );
+                if ($existing) {
+                    $sql = "UPDATE mod_openelis_code_mapping SET
+                                openemr_procedure_name = ?,
+                                openelis_test_id = ?,
+                                openelis_test_name = ?,
+                                loinc_code = ?,
+                                snomed_specimen = ?,
+                                snomed_finding = ?,
+                                units = ?,
+                                is_active = 1
+                            WHERE id = ?";
+                    sqlStatement($sql, [
+                        $procedureName, $elisTestId, $elisTestName,
+                        $loincCode ?: null, $snomedSpecimen ?: null, $snomedFinding ?: null, $units ?: null,
+                        $existing['id']
+                    ]);
+                } else {
+                    $sql = "INSERT INTO mod_openelis_code_mapping
+                                (openemr_procedure_code, openemr_procedure_name, openelis_test_id, openelis_test_name,
+                                 loinc_code, snomed_specimen, snomed_finding, units, is_active, provider_id)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)";
+                    sqlStatement($sql, [
+                        $procedureCode, $procedureName, $elisTestId, $elisTestName,
+                        $loincCode ?: null, $snomedSpecimen ?: null, $snomedFinding ?: null, $units ?: null,
+                        $providerId
+                    ]);
+                }
+            }
         }
 
+        $backProvider = isset($_POST['provider_id']) ? (int)$_POST['provider_id'] : $currentProvider;
         $searchParam = $search !== '' ? '&search=' . attr_url($search) : '';
-        header('Location: admin_mapping.php?saved=1' . $searchParam);
+        header('Location: admin_mapping.php?saved=1&provider=' . attr_url((string)$backProvider) . $searchParam);
         exit;
     }
 
@@ -193,9 +251,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $sql = "UPDATE mod_openelis_code_mapping SET is_active = NOT is_active WHERE id = ?";
             sqlStatement($sql, [$mappingId]);
         }
+        $backProvider = isset($_POST['provider_id']) ? (int)$_POST['provider_id'] : $currentProvider;
 
         $searchParam = $search !== '' ? '&search=' . attr_url($search) : '';
-        header('Location: admin_mapping.php?toggled=1' . $searchParam);
+        header('Location: admin_mapping.php?toggled=1&provider=' . attr_url((string)$backProvider) . $searchParam);
         exit;
     }
 }
@@ -231,18 +290,19 @@ while ($rowCol = sqlFetchArray($rsCols)) {
 
 $countBase = "FROM procedure_type pt
     LEFT JOIN mod_openelis_code_mapping m ON pt.procedure_code = m.openemr_procedure_code
+        AND m.provider_id = ?
     WHERE pt.activity = 1 AND pt.procedure_type = 'ord'" . $imagingFilter . $whereExtra;
 
 $countUnmapped = sqlQuery(
     "SELECT COUNT(*) AS total " . $countBase . " AND m.id IS NULL",
-    $paramsExtra
+    array_merge([$currentProvider], $paramsExtra)
 );
 $totalUnmapped = (int)($countUnmapped['total'] ?? 0);
 $totalPagesUnmapped = max(1, (int)ceil($totalUnmapped / $perPage));
 
 $countMapped = sqlQuery(
     "SELECT COUNT(*) AS total " . $countBase . " AND m.id IS NOT NULL",
-    $paramsExtra
+    array_merge([$currentProvider], $paramsExtra)
 );
 $totalMapped = (int)($countMapped['total'] ?? 0);
 $totalPagesMapped = max(1, (int)ceil($totalMapped / $perPage));
@@ -254,10 +314,11 @@ $rsUnmapped = sqlStatement(
     "SELECT pt.procedure_code, pt.name, pt.standard_code
     FROM procedure_type pt
     LEFT JOIN mod_openelis_code_mapping m ON pt.procedure_code = m.openemr_procedure_code
+        AND m.provider_id = ?
     WHERE pt.activity = 1 AND pt.procedure_type = 'ord' AND m.id IS NULL" . $imagingFilter . $whereExtra . "
     ORDER BY pt.name
     LIMIT ? OFFSET ?",
-    array_merge($paramsExtra, [$perPage, $offsetUnmapped])
+    array_merge([$currentProvider], $paramsExtra, [$perPage, $offsetUnmapped])
 );
 
 $unmapped = [];
@@ -274,10 +335,11 @@ $rsMapped = sqlStatement(
             m.loinc_code, m.snomed_specimen, m.snomed_finding, m.units, m.is_active
     FROM procedure_type pt
     INNER JOIN mod_openelis_code_mapping m ON pt.procedure_code = m.openemr_procedure_code
+        AND m.provider_id = ?
     WHERE pt.activity = 1 AND pt.procedure_type = 'ord'" . $imagingFilter . $whereExtra . "
     ORDER BY pt.name
     LIMIT ? OFFSET ?",
-    array_merge($paramsExtra, [$perPage, $offsetMapped])
+    array_merge([$currentProvider], $paramsExtra, [$perPage, $offsetMapped])
 );
 
 $mapped = [];
@@ -345,10 +407,10 @@ $webRoot = $GLOBALS['webroot'] ?? '';
         </div>
     <?php endif; ?>
 
-    <!-- Search -->
-    <div class="row mb-3">
-        <div class="col-md-8 col-lg-6">
-            <form method="get" class="input-group">
+    <!-- Search + lab provider selector -->
+    <form method="get" class="row g-2 align-items-center mb-3">
+        <div class="col-md-5 col-lg-4">
+            <div class="input-group">
                 <input type="text" class="form-control" name="search"
                        placeholder="<?php echo attr("Search by name, code, or standard..."); ?>"
                        value="<?php echo attr($search); ?>">
@@ -356,9 +418,23 @@ $webRoot = $GLOBALS['webroot'] ?? '';
                 <?php if ($search !== ''): ?>
                     <a href="admin_mapping.php" class="btn btn-outline-secondary"><?php echo xlt("Clear"); ?></a>
                 <?php endif; ?>
-            </form>
+            </div>
         </div>
-    </div>
+        <div class="col-md-4 col-lg-3">
+            <label class="form-label small mb-0"><?php echo xlt("Lab provider"); ?></label>
+            <select name="provider" class="form-select form-select-sm" onchange="this.form.submit()">
+                <?php foreach ($providers as $pv): ?>
+                    <option value="<?php echo attr($pv['ppid']); ?>"
+                            <?php echo $currentProvider === $pv['ppid'] ? 'selected' : ''; ?>>
+                        <?php echo text($pv['name']); ?>
+                    </option>
+                <?php endforeach; ?>
+                <option value="0" <?php echo $currentProvider === 0 ? 'selected' : ''; ?>>
+                    <?php echo xlt("— Legacy (sin proveedor) —"); ?>
+                </option>
+            </select>
+        </div>
+    </form>
 
     <!-- ── Unmapped Procedures ──────────────────────────────────────── -->
     <div class="mapping-section">
@@ -404,6 +480,7 @@ $webRoot = $GLOBALS['webroot'] ?? '';
                                     <input type="hidden" name="action" value="save_mapping">
                                     <input type="hidden" name="procedure_code" value="<?php echo attr($row['procedure_code']); ?>">
                                     <input type="hidden" name="procedure_name" value="<?php echo attr($row['name']); ?>">
+                                    <input type="hidden" name="provider_id" value="<?php echo attr($currentProvider); ?>">
                                     <div class="row g-2 align-items-end">
                                         <div class="col-md-3 col-xl-2">
                                             <label class="form-label small"><?php echo xlt("OpenELIS Test"); ?></label>
@@ -532,6 +609,7 @@ $webRoot = $GLOBALS['webroot'] ?? '';
                                     <input type="hidden" name="csrf_token_form" value="<?php echo attr($csrfToken); ?>">
                                     <input type="hidden" name="action" value="toggle_active">
                                     <input type="hidden" name="mapping_id" value="<?php echo attr($row['mapping_id']); ?>">
+                                    <input type="hidden" name="provider_id" value="<?php echo attr($currentProvider); ?>">
                                     <?php if ($row['is_active']): ?>
                                         <button type="submit" class="btn btn-sm btn-outline-warning"><?php echo xlt("Deactivate"); ?></button>
                                     <?php else: ?>
@@ -547,6 +625,8 @@ $webRoot = $GLOBALS['webroot'] ?? '';
                                     <input type="hidden" name="action" value="save_mapping">
                                     <input type="hidden" name="procedure_code" value="<?php echo attr($row['procedure_code']); ?>">
                                     <input type="hidden" name="procedure_name" value="<?php echo attr($row['name']); ?>">
+                                    <input type="hidden" name="provider_id" value="<?php echo attr($currentProvider); ?>">
+                                    <input type="hidden" name="mapping_id" value="<?php echo attr($row['mapping_id']); ?>">
                                     <div class="row g-2 align-items-end">
                                         <div class="col-md-3 col-xl-2">
                                             <label class="form-label small"><?php echo xlt("OpenELIS Test"); ?></label>
@@ -836,6 +916,8 @@ function renderPagination(string $paramName, int $currentPage, int $totalPages, 
         return;
     }
 
+    $provider = isset($_GET['provider']) ? (int)$_GET['provider'] : 0;
+
     echo '<nav><ul class="pagination pagination-sm justify-content-center">';
 
     // Previous
@@ -843,6 +925,9 @@ function renderPagination(string $paramName, int $currentPage, int $totalPages, 
         $prevParams =([$paramName => $currentPage - 1]);
         if ($search !== '') {
             $prevParams['search'] = $search;
+        }
+        if ($provider > 0) {
+            $prevParams['provider'] = $provider;
         }
         echo '<li class="page-item"><a class="page-link" href="admin_mapping.php?' . http_build_query($prevParams) . '">'
             . xlt("Previous") . '</a></li>';
@@ -859,6 +944,9 @@ function renderPagination(string $paramName, int $currentPage, int $totalPages, 
         if ($search !== '') {
             $p['search'] = $search;
         }
+        if ($provider > 0) {
+            $p['provider'] = $provider;
+        }
         echo '<li class="page-item"><a class="page-link" href="admin_mapping.php?' . http_build_query($p) . '">1</a></li>';
         if ($start > 2) {
             echo '<li class="page-item disabled"><span class="page-link">…</span></li>';
@@ -869,6 +957,9 @@ function renderPagination(string $paramName, int $currentPage, int $totalPages, 
         $p =([$paramName => $i]);
         if ($search !== '') {
             $p['search'] = $search;
+        }
+        if ($provider > 0) {
+            $p['provider'] = $provider;
         }
         if ($i === $currentPage) {
             echo '<li class="page-item active"><span class="page-link">' . text($i) . '</span></li>';
@@ -885,6 +976,9 @@ function renderPagination(string $paramName, int $currentPage, int $totalPages, 
         if ($search !== '') {
             $p['search'] = $search;
         }
+        if ($provider > 0) {
+            $p['provider'] = $provider;
+        }
         echo '<li class="page-item"><a class="page-link" href="admin_mapping.php?' . http_build_query($p) . '">' . text($totalPages) . '</a></li>';
     }
 
@@ -893,6 +987,9 @@ function renderPagination(string $paramName, int $currentPage, int $totalPages, 
         $nextParams =([$paramName => $currentPage + 1]);
         if ($search !== '') {
             $nextParams['search'] = $search;
+        }
+        if ($provider > 0) {
+            $nextParams['provider'] = $provider;
         }
         echo '<li class="page-item"><a class="page-link" href="admin_mapping.php?' . http_build_query($nextParams) . '">'
             . xlt("Next") . '</a></li>';
