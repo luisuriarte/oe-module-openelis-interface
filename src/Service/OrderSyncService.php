@@ -34,7 +34,7 @@ class OrderSyncService
     public function syncPatientToOpenElis(int $patientId): string
     {
         $patientData = sqlQuery(
-            "SELECT pid, pubpid, fname, lname, DOB, sex, street, city, state, postal_code, phone_cell
+            "SELECT pid, pubpid, fname, mname, lname, DOB, sex, street, city, state, postal_code, phone_cell
              FROM patient_data WHERE pid = ?",
             [$patientId]
         );
@@ -162,17 +162,24 @@ class OrderSyncService
         $lname = $userData['lname'] ?? '';
         $fname = $userData['fname'] ?? '';
 
-        // Search existing practitioner in OpenELIS
+        // Search existing practitioner in OpenELIS. Only reuse a practitioner
+        // that already carries a UUID logical id: OpenELIS's EMR-LIS importer
+        // does UUID.fromString() on Task.requester/owner, so a HAPI sequential
+        // id (e.g. Practitioner/104) makes the import throw and the electronic
+        // order stays un-receivable in ElectronicOrders.
         $existing = $this->client->findPractitioner($npi, $lname, $fname);
-        if ($existing && !empty($existing['id'])) {
+        if ($existing && !empty($existing['id']) && self::isUuid($existing['id'])) {
             return 'Practitioner/' . $existing['id'];
         }
 
-        // Create new practitioner in OpenELIS
+        // Create or update the practitioner under a deterministic UUID (PUT),
+        // mirroring the patient sync. Stable across resends and importer-safe.
         $fhirPractitioner = PractitionerMapper::toFhirPractitioner($userData);
-        $created = $this->client->createResource($fhirPractitioner);
+        $practitionerUuid = self::uuidV5('6ba7b810-9dad-11d1-80b4-00c04fd430c8', 'openemr-practitioner-' . $providerId);
+        $fhirPractitioner['id'] = $practitionerUuid;
+        $created = $this->client->createResource($fhirPractitioner, $practitionerUuid);
 
-        $practitionerIdResolved = $created['id'] ?? null;
+        $practitionerIdResolved = $created['id'] ?? $practitionerUuid;
         if (empty($practitionerIdResolved)) {
             $found = $this->client->findPractitioner($npi, $lname, $fname);
             if ($found && !empty($found['id'])) {

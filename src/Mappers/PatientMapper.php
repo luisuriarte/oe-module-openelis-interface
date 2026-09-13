@@ -13,6 +13,13 @@ class PatientMapper
      */
     public static function toFhirPatient(array $patientData): array
     {
+        // OpenELIS stores a single first-name field (person.first_name) while
+        // OpenEMR splits names into fname + mname; merge the middle name into
+        // the first so it is not lost on import.
+        $first = trim((string)($patientData['fname'] ?? ''));
+        $middle = trim((string)($patientData['mname'] ?? ''));
+        $given = trim($first . ($middle !== '' ? ' ' . $middle : ''));
+
         $patient = [
             'resourceType' => 'Patient',
             'active' => true,
@@ -20,7 +27,7 @@ class PatientMapper
             'name' => [
                 [
                     'family' => $patientData['lname'] ?? '',
-                    'given' => array_filter([$patientData['fname'] ?? '']),
+                    'given' => $given !== '' ? [$given] : [],
                 ],
             ],
         ];
