@@ -7,6 +7,17 @@ use OpenEMR\Modules\OpenElis\CodeMappingService;
 class OrderMapper
 {
     /**
+     * Identifier system OpenELIS Global 3 uses to match an inbound
+     * ServiceRequest to the order number typed in the Electronic Orders
+     * receive screen. It must equal the `org.openelisglobal.remote.source.uri`
+     * configured on the OpenELIS side: LabOrderSearchProvider searches
+     * ServiceRequest?identifier=<remote.source.uri>|<orderNumber> and NPEs at
+     * line ~224 when that match fails. Keep in sync with the OpenELIS
+     * deployment's remote.source.uri (default same value here).
+     */
+    public const OE_REMOTE_SOURCE_URI = 'http://external-fhir-api:8080/fhir/';
+
+    /**
      * Maps an OpenEMR procedure_order + procedure_order_code to a FHIR R4 ServiceRequest.
      *
      * One ServiceRequest is generated per test (procedure_order_code).
@@ -46,9 +57,20 @@ class OrderMapper
         if ($referringOrderNumber === '') {
             $referringOrderNumber = (string)$procedureOrder['procedure_order_id'];
         }
+        // First identifier: the OpenEMR referring order number (used by the
+        // EMR-LIS importer and by FhirPersistanceServiceImpl.getTaskBasedOnServiceRequest).
+        // Second identifier: the OpenELIS remote source URI that the receive
+        // screen (LabOrderSearchProvider) searches with:
+        //   ServiceRequest?identifier=<remote.source.uri>|<orderNumber>
+        // Without this second entry the ServiceRequest is never found and the
+        // receive flow crashes on a null ServiceRequest (getLocationReferenceFirstRep NPE).
         $resource['identifier'] = [
             [
                 'system' => 'http://openemr.org/fhir/order-id',
+                'value' => $referringOrderNumber,
+            ],
+            [
+                'system' => self::OE_REMOTE_SOURCE_URI,
                 'value' => $referringOrderNumber,
             ],
         ];
