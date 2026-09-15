@@ -273,6 +273,9 @@ class ResultSyncService
             . $stats['reports'] . ' ' . strtolower(xl('reports'));
         if ($failures > 0) {
             $message .= ' — ' . $failures . ' ' . strtolower(xl('orders')) . ' ' . xl('failed');
+            if ($errors) {
+                $message .= ': ' . implode(' | ', $errors);
+            }
         }
 
         return [
