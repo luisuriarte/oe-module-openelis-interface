@@ -350,15 +350,16 @@ class ResultSyncService
     {
         sqlInsert(
             "INSERT INTO procedure_result
-                (procedure_report_id, result_data_type, result_code, result_text,
-                 date, units, result, range, abnormal, comments, result_status)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (`procedure_report_id`, `result_data_type`, `result_code`, `result_text`,
+                 `date`, `facility`, `units`, `result`, `range`, `abnormal`, `comments`, `result_status`)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 $reportId,
                 $row['result_data_type'],
                 $row['result_code'],
                 $row['result_text'],
                 $row['date'],
+                '',
                 $row['units'],
                 $row['result'],
                 $row['range'],
