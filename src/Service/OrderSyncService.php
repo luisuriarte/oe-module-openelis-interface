@@ -287,7 +287,9 @@ class OrderSyncService
             // ARCHITECTURAL NOTES:
             //   - Limitation: OpenELIS currently lacks a dedicated REST search endpoint for patientPK,
             //     so patientPK is sent empty ("") for new/upsert.
-            //   - If this REST pre-sync fails, we log the failure in detail and ABORT sending the order.
+            //   - If this REST pre-sync fails, we log the failure in detail but CONTINUE with the FHIR sync:
+            //     the patient is still created in OpenELIS via the FHIR Patient resource, and the pre-sync
+            //     is only a best-effort to ease accession auto-binding in the Webapp UI.
             //   - Complementary: The FHIR Patient resource below remains untouched as part of the FHIR order.
             //   - Notice on Tests: OpenELIS setupForm also does not auto-populate tests from the electronic
             //     order into the accession form; test selection remains manual at accession time.
@@ -309,14 +311,9 @@ class OrderSyncService
                 $pmClient->syncPatient($patientData);
             } catch (\Exception $e) {
                 error_log(
-                    "OpenELIS sync ABORTED for order #$procedureOrderId: "
-                    . "Failed to pre-register patient in OpenELIS via REST PatientManagement: " . $e->getMessage()
+                    "OpenELIS WARNING: PatientManagement pre-sync failed for order #$procedureOrderId (pid="
+                    . ($order['patient_id'] ?? '?') . "), continuing with FHIR sync: " . $e->getMessage()
                 );
-                return [
-                    'success' => false,
-                    'message' => xl('Failed to synchronize patient with OpenELIS PatientManagement: ') . $e->getMessage(),
-                    'openelis_ids' => [],
-                ];
             }
 
             // 5. Sync patient (FHIR) — Kept intact as complementary mechanism
