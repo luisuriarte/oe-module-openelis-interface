@@ -261,6 +261,10 @@ class ResultSyncService
             if (empty($out['success'])) {
                 $failures++;
                 $errors[] = '#' . $procedureOrderId . ' ' . $out['message'];
+                error_log(
+                    "OpenELIS results sync FAILED for order #$procedureOrderId: "
+                    . ($out['message'] ?? 'no message')
+                );
             }
         }
 
