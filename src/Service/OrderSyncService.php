@@ -4,6 +4,7 @@ namespace OpenEMR\Modules\OpenElis\Service;
 
 use OpenEMR\Modules\OpenElis\Client\OpenElisApiClient;
 use OpenEMR\Modules\OpenElis\Client\OpenElisApiException;
+use OpenEMR\Modules\OpenElis\Client\PatientManagementClient;
 use OpenEMR\Modules\OpenElis\CodeMappingService;
 use OpenEMR\Modules\OpenElis\Mappers\OrderMapper;
 use OpenEMR\Modules\OpenElis\Mappers\PatientMapper;
@@ -278,10 +279,50 @@ class OrderSyncService
         );
 
         try {
-            // 5. Sync patient
+            // 4b. Pre-create or update patient in OpenELIS via native REST PatientManagement.
+            // In OpenELIS Global 2 (SamplePatientEntryController.setupForm), accessioning an electronic
+            // order requires the patient to exist as a physical relational record in OpenELIS, otherwise
+            // accession fails to auto-bind and demands manual patient creation with subjectNumber.
+            //
+            // ARCHITECTURAL NOTES:
+            //   - Limitation: OpenELIS currently lacks a dedicated REST search endpoint for patientPK,
+            //     so patientPK is sent empty ("") for new/upsert.
+            //   - If this REST pre-sync fails, we log the failure in detail and ABORT sending the order.
+            //   - Complementary: The FHIR Patient resource below remains untouched as part of the FHIR order.
+            //   - Notice on Tests: OpenELIS setupForm also does not auto-populate tests from the electronic
+            //     order into the accession form; test selection remains manual at accession time.
+            $patientData = sqlQuery(
+                "SELECT pid, pubpid, fname, lname, DOB, sex, street, city, state, postal_code, phone_cell
+                 FROM patient_data WHERE pid = ?",
+                [$order['patient_id']]
+            );
+            if (empty($patientData)) {
+                return [
+                    'success' => false,
+                    'message' => xl('Patient record not found in OpenEMR: pid=') . $order['patient_id'],
+                    'openelis_ids' => [],
+                ];
+            }
+
+            try {
+                $pmClient = PatientManagementClient::fromProvider($provider);
+                $pmClient->syncPatient($patientData);
+            } catch (\Exception $e) {
+                error_log(
+                    "OpenELIS sync ABORTED for order #$procedureOrderId: "
+                    . "Failed to pre-register patient in OpenELIS via REST PatientManagement: " . $e->getMessage()
+                );
+                return [
+                    'success' => false,
+                    'message' => xl('Failed to synchronize patient with OpenELIS PatientManagement: ') . $e->getMessage(),
+                    'openelis_ids' => [],
+                ];
+            }
+
+            // 5. Sync patient (FHIR) — Kept intact as complementary mechanism
             $patientRef = $this->syncPatientToOpenElis($order['patient_id']);
 
-            // 6. Sync practitioner
+            // 6. Sync practitioner (FHIR)
             $practitionerRef = $this->syncPractitionerToOpenElis($order['provider_id']);
 
             // 7. Build resources per test
