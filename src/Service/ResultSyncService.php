@@ -152,8 +152,13 @@ class ResultSyncService
                     }
 
                     $reportId = $this->storeReport($order, $seq, $mapped['report']);
-                    foreach ($mapped['results'] as $row) {
-                        $this->storeResult($reportId, $row);
+                    try {
+                        foreach ($mapped['results'] as $row) {
+                            $this->storeResult($reportId, $row);
+                        }
+                    } catch (\Exception $e) {
+                        sqlStatement("DELETE FROM procedure_report WHERE procedure_report_id = ?", [$reportId]);
+                        throw $e;
                     }
                     $stats['reports']++;
                     $stats['results'] += count($mapped['results']);

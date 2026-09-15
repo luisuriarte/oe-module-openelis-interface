@@ -172,29 +172,6 @@ class OpenElisApiClient
      */
     public function fetchReportObservations(array $report): array
     {
-        $reportId = $report['id'] ?? '';
-        if ($reportId !== '') {
-            $response = $this->request('GET', 'DiagnosticReport/' . $reportId, [
-                '_include' => 'DiagnosticReport:result',
-            ]);
-            if ($response['status'] < 400) {
-                $bundle = json_decode($response['body'], true);
-                if (is_array($bundle)) {
-                    $observations = [];
-                    foreach (($bundle['entry'] ?? []) as $entry) {
-                        $resource = $entry['resource'] ?? null;
-                        if (($resource['resourceType'] ?? '') === 'Observation') {
-                            $observations[] = $resource;
-                        }
-                    }
-                    if ($observations) {
-                        return $observations;
-                    }
-                }
-            }
-        }
-
-        // Fallback: fetch each observation reference individually.
         $observations = [];
         foreach (($report['result'] ?? []) as $ref) {
             $got = $this->fetchResourceByReference($ref);
@@ -202,7 +179,6 @@ class OpenElisApiClient
                 $observations[] = $got;
             }
         }
-
         return $observations;
     }
 
