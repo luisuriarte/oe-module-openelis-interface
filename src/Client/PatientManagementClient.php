@@ -40,7 +40,7 @@ class PatientManagementClient
     /**
      * Create client instance from OpenEMR procedure_providers row.
      *
-     * Collects all candidate credentials (catalog login, provider login, usersync/admin)
+     * Collects all candidate credentials (catalog login, provider login)
      * so that if one user lacks permissions (HTTP 401), the client falls back to the next.
      *
      * @param array $provider  Row from procedure_providers
@@ -62,22 +62,12 @@ class PatientManagementClient
             $candidates[] = ['login' => $provLogin, 'password' => $provPass];
         }
 
-        // Known OpenELIS Webapp users fallback
-        $knownUsers = [
-            ['login' => 'usersync', 'password' => 'S4nC4rl0sC3ntr0$'],
-            ['login' => 'admin', 'password' => 'adminADMIN!'],
-        ];
-        foreach ($knownUsers as $ku) {
-            $already = false;
-            foreach ($candidates as $c) {
-                if ($c['login'] === $ku['login']) {
-                    $already = true;
-                    break;
-                }
-            }
-            if (!$already) {
-                $candidates[] = $ku;
-            }
+        if (empty($candidates)) {
+            throw new \RuntimeException(
+                "No OpenELIS credentials found for lab provider (ppid="
+                . ($provider['ppid'] ?? '?') . "). "
+                . "Set mod_openelis_catalog_login or login/password in procedure_providers."
+            );
         }
 
         $remoteHost = (string)($provider['remote_host'] ?? '');
