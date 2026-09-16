@@ -32,9 +32,9 @@
 | Característica | Estado | Descripción |
 |----------------|--------|-------------|
 | 🔀 Mapeo de códigos | ✅ Listo | Asocia códigos de procedimientos de OpenEMR con IDs de pruebas de OpenELIS |
-| 🧪 Sincronización de órdenes | 🔜 Próximamente | Envía órdenes de laboratorio de OpenEMR a OpenELIS |
-| 👤 Sincronización de pacientes | 🔜 Próximamente | Sincroniza demografía de pacientes |
-| 📊 Obtención de resultados | 🔜 Próximamente | Recupera resultados de laboratorio vía webhook |
+| 🧪 Sincronización de órdenes | ✅ Listo | Envía órdenes de laboratorio de OpenEMR a OpenELIS (Specimen + ServiceRequest + Task) |
+| 👤 Sincronización de pacientes | ✅ Listo | Sincroniza demografía de pacientes + practitioner ordenante (FHIR Patient/Practitioner) |
+| 📊 Obtención de resultados | 🚧 Parcial | Recupera DiagnosticReport/Observation bajo demanda — **bloqueado** por un problema de lectura por ID en el store (ver Troubleshooting) |
 | 🔔 Notificación de resultados | 🔜 Próximamente | Notifica a pacientes y profesionales de resultados |
 
 ---
@@ -50,12 +50,23 @@
 │  │   oe-module-openelis      │  │         │  │     OpenELIS Global 2     │  │
 │  │                           │  │         │  │                           │  │
 │  │  • Mapeo de códigos       │  │         │  │  • Catálogo de pruebas    │  │
-│  │  • Sinc. órdenes (plan.)  │  │         │  │  • Gestión de pacientes   │  │
-│  │  • Sinc. pacientes (plan.)│  │         │  │  • Gestión de órdenes     │  │
+│  │  • Sinc. órdenes (listo)  │  │         │  │  • Gestión de pacientes   │  │
+│  │  • Sinc. pacientes (listo)│  │         │  │  • Gestión de órdenes     │  │
 │  │  • Webhook de resultados  │  │         │  │  • Reporte de resultados  │  │
 │  └───────────────────────────┘  │         │  └───────────────────────────┘  │
 └─────────────────────────────────┘         └─────────────────────────────────┘
 ```
+
+> ⚙️ **Topología de despliegue (setup Origen):** OpenELIS corre **dos Tomcats**
+> que comparten una misma base PostgreSQL (schema `clinlims`):
+>
+> | Contenedor | Función | Puertos visibles en el host |
+> |-----------|---------|----------------------|
+> | `openelisglobal-webapp` | App UI + writer FHIR embebido (`/OpenELIS-Global/fhir`) | `127.0.0.1:8443` (HTTPS) |
+> | `external-fhir-api` | **Store FHIR** independiente (`fhir.openelis.org`) que este módulo lee/escribe | `127.0.0.1:8444` (HTTPS, TLS mutuo) + `127.0.0.1:8081` (HTTP, restaurado) |
+>
+> El `remote_host` configurado en `procedure_providers` apunta al store FHIR por
+> HTTP: `http://127.0.0.1:8081/fhir/`.
 
 ---
 
@@ -490,6 +501,48 @@ Los resultados se traen **bajo demanda** (botones) — aún no hay sondeo autom�
   los payloads reales (`?ppid=<id>` lista los informes recientes;
   `?ppid=<id>&sr=ServiceRequest/<uuid>` muestra los informes de una prueba + sus
   observaciones) antes de confiar en el mapeo.
+
+### Troubleshooting (store FHIR)
+
+Síntomas, causas raíz y soluciones encontradas durante la integración:
+
+- **`cURL error: Recv failure: Connection reset by peer` en todas las órdenes.**
+  El Tomcat del store (`external-fhir-api`) **no tenía listener HTTP**. Su
+  `/opt/bitnami/tomcat/conf/server.xml` viene con el conector `8080`
+  **comentado** — solo está activo el conector HTTPS `8443` con TLS mutuo
+  (`clientAuth="true"`). El módulo habla HTTP plano
+  (`http://127.0.0.1:8081/fhir/`), así que hay que restaurarlo:
+  ```xml
+  <Connector port="8080" protocol="HTTP/1.1" connectionTimeout="20000" redirectPort="8443"/>
+  ```
+  y luego `docker restart external-fhir-api`. Verificar:
+  `curl -s 'http://127.0.0.1:8081/fhir/metadata'` → HTTP 200.
+
+- **`HAPI-2001: Resource <tipo>/<id> is not known` al leer un recurso por ID,
+  aunque exista en `hfj_resource`.** Los recursos fueron creados por el **propio
+  writer FHIR del webapp** de OpenELIS (IDs numéricos asignados por cliente,
+  p. ej. `ServiceRequest/6159`) y viven en el PostgreSQL compartido
+  (`hfj_resource`/`hfj_res_ver`, `res_deleted_at` NULL). La búsqueda funciona
+  (`/DiagnosticReport?_count=5` los devuelve), pero **read-by-ID (GET) falla**.
+  Para que un ID resuelva, el recurso debe crearse a través de la API del propio
+  store (como hace el flujo de sondeo del webapp), de modo que el path de lectura
+  mapee ID → PID interno. Workaround: mantener al store como único escritor
+  (`common.properties` del webapp →
+  `remote.source.uri=http://external-fhir-api:8080/fhir/` +
+  `fhir.subscriber.resources`) para que los resultados los persista el store.
+
+- **`HAPI-0960` / "ID in the past not assignable by client" al crear
+  Patient/Practitioner.** El store aplica `client_id_strategy`; el default de la
+  imagen del webapp rechaza IDs numéricos asignados por cliente. Setear
+  `HAPI_FHIR_CLIENT_ID_STRATEGY=ANY` en el servicio `fhir.openelis.org` del
+  `docker-compose.yml` y recrear el contenedor. Verificar con un POST de un
+  recurso con ID numérico → debe dar HTTP 201.
+
+- **HTTP 000/rechazado desde el host de OpenEMR en `:8444`.** Ese puerto es el
+  lado HTTPS del store con **TLS mutuo** — requiere certificado de cliente (el
+  PKCS12 `/etc/openelis-global/keystore`, formato legacy; keytool debe
+  convertirlo para uso con OpenSSL/curl). Preferir el endpoint HTTP `:8081` para
+  el tráfico del módulo.
 
 ---
 
