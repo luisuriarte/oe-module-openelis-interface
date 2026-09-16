@@ -89,14 +89,15 @@ echo "Provider: #{$provider['ppid']} {$provider['name']} ({$provider['remote_hos
 $sr = (string)($_GET['sr'] ?? '');
 
 if ($sr !== '') {
-    echo "== DiagnosticReport?based-on=$sr ==\n";
-    $reports = $client->findDiagnosticReportsByServiceRequest($sr);
-    echo "count: " . count($reports) . "\n";
-    foreach ($reports as $report) {
+    echo "== DiagnosticReport search (global, _include=DiagnosticReport:result) filtered by basedOn=$sr ==\n";
+    $matches = $client->findDiagnosticReportsByServiceRequest($sr);
+    echo "count: " . count($matches) . "\n";
+    foreach ($matches as $match) {
+        $report = $match['report'];
         echo "---- report " . ($report['id'] ?? '(no id)') . " ----\n";
         echo json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n";
-        echo "-- observations (via _include / per-ref fallback) --\n";
-        foreach ($client->fetchReportObservations($report) as $obs) {
+        echo "-- observations (from _include Bundle / per-ref fallback) --\n";
+        foreach ($match['observations'] as $obs) {
             echo json_encode($obs, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n";
         }
     }

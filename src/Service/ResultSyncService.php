@@ -127,10 +127,13 @@ class ResultSyncService
             $serviceRequestRef = (string)$code['mod_openelis_service_request_id'];
 
             try {
-                $reports = $this->client->findDiagnosticReportsByServiceRequest($serviceRequestRef);
+                $matches = $this->client->findDiagnosticReportsByServiceRequest($serviceRequestRef);
                 $importedReports = 0;
 
-                foreach ($reports as $report) {
+                foreach ($matches as $match) {
+                    $report = $match['report'];
+                    $observations = $match['observations'];
+
                     // Never import results that reference a different patient.
                     if (($report['subject']['reference'] ?? '') !== $verifiedPatientRef) {
                         error_log(
@@ -141,7 +144,6 @@ class ResultSyncService
                         continue;
                     }
 
-                    $observations = $this->client->fetchReportObservations($report);
                     if (empty($observations)) {
                         continue;
                     }

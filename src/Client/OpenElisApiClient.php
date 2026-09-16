@@ -97,16 +97,26 @@ class OpenElisApiClient
     }
 
     /**
-     * Search DiagnosticReports that are based on a ServiceRequest (chained
-     * FHIR search). Each report carries the lab results for that test line.
+     * Find DiagnosticReports that carry lab results and bring their
+     * Observations along in the same Bundle.
      *
-     * @param string $serviceRequestRef  e.g. "ServiceRequest/<uuid>"
-     * @return array                     List of DiagnosticReport resources (may be empty)
+     * Implements the result lookup without relying on read-by-ID or the
+     * `based-on` chained search, both of which the OpenELIS FHIR store cannot
+     * resolve for resources persisted with numeric (client-assigned) IDs
+     * (no `hfj_forced_id` row → `HAPI-2001` on GET, `total=0` on chained
+     * search). A single plain search with `_include=DiagnosticReport:result`
+     * returns the reports AND their included Observations in one request; we
+     * then filter in PHP by matching `basedOn[].reference` against the
+     * ServiceRequest ref stored on the test line.
+     *
+     * @param string $serviceRequestRef  e.g. "ServiceRequest/<id>"
+     * @return array                     List of ['report' => ..., 'observations' => [...]] (may be empty)
      */
     public function findDiagnosticReportsByServiceRequest(string $serviceRequestRef): array
     {
         $response = $this->request('GET', 'DiagnosticReport', [
-            'based-on' => $serviceRequestRef,
+            '_count' => 200,
+            '_include' => 'DiagnosticReport:result',
         ]);
 
         if ($response['status'] >= 400) {
@@ -118,15 +128,83 @@ class OpenElisApiClient
             return [];
         }
 
-        $reports = [];
+        // Index all bundled resources by their "ResourceType/<id>" reference
+        // (matched reports + the Observations pulled in via _include).
+        $includedByRef = [];
         foreach (($bundle['entry'] ?? []) as $entry) {
             $resource = $entry['resource'] ?? null;
-            if (!empty($resource['resourceType']) && $resource['resourceType'] === 'DiagnosticReport') {
-                $reports[] = $resource;
+            if (is_array($resource) && !empty($resource['resourceType'])) {
+                $includedByRef[$resource['resourceType'] . '/' . $resource['id']] = $resource;
             }
         }
 
+        $targetId = self::lastSegment($serviceRequestRef);
+
+        $reports = [];
+        foreach (($bundle['entry'] ?? []) as $entry) {
+            $resource = $entry['resource'] ?? null;
+            if (!is_array($resource) || ($resource['resourceType'] ?? '') !== 'DiagnosticReport') {
+                continue;
+            }
+            if (!self::reportBasedOnMatches($resource, $targetId)) {
+                continue;
+            }
+
+            $reports[] = [
+                'report' => $resource,
+                'observations' => $this->observationsOfReport($resource, $includedByRef),
+            ];
+        }
+
         return $reports;
+    }
+
+    /**
+     * True when any `basedOn[].reference` of the report resolves to the same
+     * ServiceRequest id as the one stored on the order's test line.
+     */
+    private static function reportBasedOnMatches(array $report, string $targetId): bool
+    {
+        foreach (($report['basedOn'] ?? []) as $basedOn) {
+            $ref = (string)($basedOn['reference'] ?? '');
+            if (self::lastSegment($ref) === $targetId) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Collect the Observation resources of a DiagnosticReport. Prefers the
+     * Observations already carried by the `_include` Bundle; falls back to a
+     * per-reference GET only for references the store can still resolve
+     * (e.g. Observations stored under a UUID forced ID).
+     */
+    private function observationsOfReport(array $report, array $includedByRef): array
+    {
+        $observations = [];
+        foreach (($report['result'] ?? []) as $ref) {
+            $reference = (string)($ref['reference'] ?? '');
+            if (isset($includedByRef[$reference])) {
+                $observations[] = $includedByRef[$reference];
+                continue;
+            }
+            $got = $this->fetchResourceByReference($ref);
+            if ($got !== null) {
+                $observations[] = $got;
+            }
+        }
+        return $observations;
+    }
+
+    /**
+     * Last path segment of a reference, e.g. "ServiceRequest/330" → "330".
+     */
+    private static function lastSegment(string $ref): string
+    {
+        $ref = rtrim(trim($ref), '/');
+        $pos = strrpos($ref, '/');
+        return $pos === false ? $ref : substr($ref, $pos + 1);
     }
 
     /**
