@@ -86,7 +86,7 @@ openelis/
 │   ├── 🔧 OrderSyncService.php           # Servicios syncPatient/syncPractitioner/sendOrder
 │   ├── 📂 Client/                        # Clientes HTTP (FHIR + catálogo REST)
 │   │   ├── 🔌 OpenElisApiClient.php      # Cliente FHIR R4 (flujo de envío de órdenes)
-│   │   └── 🔌 CatalogApiClient.php       # Cliente REST test-catalog (usuario admin catálogo)
+│   │   └── 🔌 CatalogApiClient.php       # Cliente REST del catálogo (GET /rest/TestCatalog, usuario admin catálogo)
 │   ├── 📂 Mappers/                       # Mapeadores FHIR Patient/Practitioner/Order
 │   └── 📂 Service/                       # Servicios de negocio
 │       └── 🗄️ CatalogImportService.php   # Catálogo REST → procedure_type + mapeos (por proveedor)
@@ -234,8 +234,8 @@ OpenELIS distinta. La clave única es por lo tanto
 | `openemr_procedure_name` | VARCHAR(255) | Nombre para mostrar del procedimiento |
 | `openelis_test_id` | VARCHAR(50) | ID de prueba en OpenELIS |
 | `openelis_test_name` | VARCHAR(255) | Nombre de la prueba en OpenELIS |
-| `openelis_panel_id` | VARCHAR(20) | Panel de OpenELIS del que se importó la prueba (informativo) |
-| `openelis_panel_name` | VARCHAR(255) | Nombre del panel (informativo) |
+| `openelis_panel_id` | VARCHAR(20) | Código del grp de sección del que cuelga la prueba (`OEP..-SEC-..`, informativo) |
+| `openelis_panel_name` | VARCHAR(255) | Nombre de sección/panel (informativo) |
 | `is_active` | TINYINT(1) | 1 = activo, 0 = inactivo |
 | `import_source` | ENUM(`'manual'`,`'catalog_import'`) | Las filas `manual` nunca se sobrescriben al importar |
 | `imported_at` | DATETIME | Última vez que el importador tocó esta fila |
@@ -253,34 +253,37 @@ Comportamiento de colisión al importar:
 ### 🧩 Importación de catálogo (REST) — `catalog_import.php`
 
 La vía recomendada para armar el catálogo de procedimientos de un proveedor.
-Lee la API REST de OpenELIS `GET /OpenELIS-Global/rest/test-catalog/*`
+Lee la API REST de OpenELIS en **una sola llamada** — `GET /OpenELIS-Global/rest/TestCatalog`
 (requiere un usuario **ADMIN** de OpenELIS, configurado por proveedor en
 `procedure_providers.mod_openelis_catalog_login` / `mod_openelis_catalog_password`
 — nunca el usuario operativo Analyser Import; se editan en el formulario nativo
 de proveedores, ver `patches/procedure_provider_edit.php`) y:
 
-1. Lista los paneles activos y, por panel, sus pruebas ordenables.
-2. Cruza cada prueba contra la lista de pruebas activas
-   (`errorCount` / `findings`):
-   - `errorCount > 0` o cualquier finding de severidad ERROR → **excluida**
-     (p. ej. una prueba huérfana sin vínculo de tipo de muestra,
-     `SAMPLE_TYPE_LINKS`);
-   - findings solo WARNING (p. ej. `DUPLICATE_LOINC_DIFF_SPECIMEN`) → incluida
-     y reportada;
-   - ausente de la lista activa → excluida como inactiva.
+1. Lee el **catálogo completo** (un único documento sin paginación; todas las
+   pruebas, activas e inactivas) y conserva solo las **activas** (`active` =
+   "Active"). La API **no** expone los paneles como lista — no existe el
+   endpoint `/rest/test-catalog/panels*` (esas rutas responden 404 de Tomcat),
+   por lo que el import es **test-céntrico**.
+2. Agrupa las pruebas bajo un `grp` por **sección** de prueba de OpenELIS
+   (`testUnit`); el nombre del panel que reporta cada prueba se guarda solo como
+   dato informativo en el mapeo.
 3. Crea/actualiza filas `procedure_type` por proveedor:
    ```
-   grp  OEP{providerId}-{panelId}   ej. OEP2-5      (parent = 0, nivel top)
-     ord OE{providerId}-T{testId}   ej. OE2-T42     (cuelga de su panel vía parent)
+   grp  OEP{providerId}-SEC-{hash8}  ej. OEP2-SEC-1a2b3c4d (parent = 0, nivel top;
+                                     hash8 = primeros 8 hex de md5(nombre de
+                                     sección en minúsculas), estable entre runs)
+     ord OE{providerId}-T{testId}    ej. OE2-T42     (cuelga de su sección vía parent)
    ```
    `parent` referencia el **`procedure_type_id`** (PK autoincremental) del grp
-   del panel — no su código. Los códigos son determinísticos por
-   `(proveedor, prueba)` / `(proveedor, panel)`, así que re-importar es
+   de la sección — no su código. Los códigos son determinísticos por
+   `(proveedor, prueba)` / `(proveedor, sección)`, así que re-importar es
    idempotente y nunca choca entre laboratorios. Los nombres se truncan a los 63
    caracteres de la columna sin cortar palabras; la unicidad depende **solo** de
    `procedure_code`.
 4. Genera una fila `mod_openelis_code_mapping` por prueba importada con
-   `import_source = 'catalog_import'` y el LOINC cuando existe.
+   `import_source = 'catalog_import'` y el LOINC cuando el catálogo lo provee.
+   `openelis_panel_id` lleva el código del grp de sección y `openelis_panel_name`
+   el string del panel (informativo en ambos casos).
 5. Extrae el **tipo de muestra** (`sampleType`) que trae el payload REST por
    prueba y lo resuelve contra la tabla de traducción única
    `mod_openelis_specimen_map` (ver abajo). El código SNOMED resuelto se guarda
@@ -298,15 +301,16 @@ de proveedores, ver `patches/procedure_provider_edit.php`) y:
 7. **Reconciliación (desactivar sin borrar)**: al sincronizar, las filas
    propias del proveedor (`OE{p}-T*` y `OEP{p}-*`) que el catálogo ya **no**
    referencia pasan a `activity = 0` (nunca se borran) y su mapeo auto baja a
-   `is_active = 0`. Si una prueba/panel vuelve a aparecer, se reactiva
+   `is_active = 0`. Si una prueba/sección vuelve a aparecer, se reactiva
    automáticamente (`activity = 1`, mapeo activo). Ambas transiciones
    (desactivación y reactivación) se **reportan en el resumen**, nada silencioso.
-   Un test que **cambia de panel** se vuelve a colgar automáticamente bajo el
-   panel nuevo (el `parent` se reasigna en cada sync; jamás queda huérfano sin
-   existir). Salvaguardas: la reconciliación solo corre si la lectura vio paneles
-   **y** pruebas; si algún panel devolvió miembros vacíos (posible fallo
-   transitorio) se omite la pasada de desactivación de pruebas. Un error de
-   catálogo transitorio **no** desactiva rows preexistentes.
+   Un test que **cambia de sección** se vuelve a colgar automáticamente bajo la
+   sección nueva (el `parent` se reasigna en cada sync; jamás queda huérfano sin
+   existir). Salvaguardas: la reconciliación solo corre si la lectura vio
+   secciones **y** pruebas; una lectura fallida/vacía del catálogo **no**
+   desactiva filas preexistentes. Los grps del **esquema viejo basado en
+   paneles** (`OEP{p}-{panelId}`) que no coincidan con ninguna sección se
+   desactivan igual en el primer run del importador test-céntrico.
 
 ### 🧬 `mod_openelis_specimen_map` — tipo de muestra → SNOMED (una sola vez)
 
@@ -594,11 +598,19 @@ Este módulo sigue los estándares de módulos custom de OpenEMR:
 ### Referencia de OpenELIS Global 2
 
 El catálogo de pruebas se lee por la API REST sobre HTTPS (el laboratorio entrega
-solo un usuario/clave de API, no credenciales de base de datos):
+solo un usuario/clave de API, no credenciales de base de datos); ambos endpoints
+usan Basic Auth con un usuario de OpenELIS con rol **ADMIN**:
 
 | Endpoint | Método | Notas |
 |----------|--------|-------|
-| `/OpenELIS-Global/rest/TestNamesProvider?testId={id}` | GET | Devuelve el nombre de UNA prueba (`name.spanish` / `name.english`) para un solo id numérico. `testId=all` → HTTP 500, por lo que los ids se sondean de a uno en un rango configurable. NO devuelve LOINC. |
+| `/OpenELIS-Global/rest/TestCatalog` | GET | **Importación de catálogo (`CatalogApiClient`)** — devuelve el catálogo COMPLETO en un solo documento (`{ testCatalogList, testSectionList }`). Por prueba: id, nombre localizado, sección (`testUnit`), sampleType, panel (string de display), loinc, uom, active ("Active"/"Not active"), orderable, sort order, límites/diccionarios de resultados. Sin paginación y sin lista de paneles. |
+| `/OpenELIS-Global/rest/TestNamesProvider?testId={id}` | GET | Sonda legacy de nombre (`OpenElisCatalog`), conservada solo como fallback/referencia: devuelve el nombre de UNA prueba para un solo id numérico. `testId=all` → HTTP 500, por lo que los ids se sondean de a uno. NO devuelve LOINC. |
+
+- OpenELIS **no** expone los paneles como lista por REST: toda ruta
+  `/OpenELIS-Global/rest/test-catalog/panels*` responde el **404** de Tomcat que
+  se ve cuando un cliente asume un endpoint de paneles. La pertenencia a panel solo
+  aparece como string de display por prueba, razón por la que el import agrupa por
+  sección.
 
 - La tabla espejo local `mod_openelis_test_catalog` se mantiene fresca con la
   importación de catálogo (`public/catalog_import.php` / `CatalogImportService`),
@@ -607,8 +619,9 @@ solo un usuario/clave de API, no credenciales de base de datos):
 - La página de mapeo (`public/admin_mapping.php`) lee ese espejo local para
   autosugerir el id/nombre de prueba de OpenELIS al asignar un mapeo — sin llamadas
   a la API por cada tecla.
-- El LOINC no lo entrega este endpoint, por lo que es opcional / se ingresa a mano
-  (o se pre-sugiere desde `procedure_type.standard_code` en el formulario de mapeo).
+- El LOINC viene de `GET /rest/TestCatalog` cuando está configurado en la prueba
+  de OpenELIS; si no, queda opcional — se ingresa a mano (o se pre-sugiere desde
+  `procedure_type.standard_code` en el formulario de mapeo).
 - El diseño previo (leer las tablas `clinlims.*` de PostgreSQL de OpenELIS
   directamente) se descartó porque el laboratorio no comparte credenciales de BD.
 
@@ -621,9 +634,10 @@ exportación que el admin dejaba junto a los scripts desplegados
 OpenELIS**. Esa página, la clase importadora de CSV y los archivos de ejemplo
 fueron **eliminados**. La importación vía REST en
 [`catalog_import.php`](#-importación-de-catálogo-rest--catalog_importphp)
-cubre el mismo objetivo (paneles + pruebas ordenables → árbol `procedure_type` +
-`mod_openelis_code_mapping`) usando las credenciales de catálogo ADMIN de cada
-proveedor, sin requerir acceso a la base de datos ni exportaciones CSV.
+cubre el mismo objetivo (pruebas activas agrupadas por sección → árbol
+`procedure_type` + `mod_openelis_code_mapping`) usando las credenciales de
+catálogo ADMIN de cada proveedor, sin requerir acceso a la base de datos ni
+exportaciones CSV.
 
 ### Referencia de capacidades FHIR de OpenELIS
 

@@ -86,7 +86,7 @@ openelis/
 │   ├── 🔧 OrderSyncService.php           # syncPatient/syncPractitioner/sendOrder services
 │   ├── 📂 Client/                        # HTTP clients (FHIR + catalog REST)
 │   │   ├── 🔌 OpenElisApiClient.php      # FHIR R4 client (order send flow)
-│   │   └── 🔌 CatalogApiClient.php       # test-catalog REST client (admin catalog user)
+│   │   └── 🔌 CatalogApiClient.php       # catalog REST client (GET /rest/TestCatalog, admin catalog user)
 │   ├── 📂 Mappers/                       # Patient/Practitioner/Order FHIR mappers
 │   └── 📂 Service/                       # Business services
 │       └── 🗄️ CatalogImportService.php   # Catalog REST → procedure_type + mappings (per provider)
@@ -233,8 +233,8 @@ references `procedure_providers.ppid` (0 = legacy/unassigned rows).
 | `openemr_procedure_name` | VARCHAR(255) | Procedure display name |
 | `openelis_test_id` | VARCHAR(50) | OpenELIS test ID |
 | `openelis_test_name` | VARCHAR(255) | Test display name in OpenELIS |
-| `openelis_panel_id` | VARCHAR(20) | OpenELIS panel the test was imported from (informational) |
-| `openelis_panel_name` | VARCHAR(255) | OpenELIS panel name (informational) |
+| `openelis_panel_id` | VARCHAR(20) | Section grp code the test hangs from (`OEP..-SEC-..`, informational) | 
+| `openelis_panel_name` | VARCHAR(255) | Section/panel display name (informational) |
 | `is_active` | TINYINT(1) | 1 = active, 0 = inactive |
 | `import_source` | ENUM(`'manual'`,`'catalog_import'`) | `manual` rows are never overwritten by the importer |
 | `imported_at` | DATETIME | Last time the catalog importer touched this row |
@@ -252,32 +252,36 @@ The **import behavior** for collisions:
 ### 🧩 Catalog import (REST) — `catalog_import.php`
 
 The recommended way to build the procedure catalog for a provider. Reads the
-OpenELIS REST API `GET /OpenELIS-Global/rest/test-catalog/*` (requires an
-**OpenELIS ADMIN** user, configured per provider as
+OpenELIS REST API in **one call** — `GET /OpenELIS-Global/rest/TestCatalog`
+(requires an **OpenELIS ADMIN** user, configured per provider as
 `procedure_providers.mod_openelis_catalog_login` / `mod_openelis_catalog_password`
 — never the operational Analyser Import user; edited on the native Procedure
 Providers form, see `patches/procedure_provider_edit.php`) and:
 
-1. Lists active panels and, per panel, its ordered tests.
-2. Cross-checks every test against the active-tests list
-   (`errorCount` / `findings`):
-   - `errorCount > 0` or any ERROR finding → **excluded** (e.g. an orphan test
-     missing its sample-type link, `SAMPLE_TYPE_LINKS`);
-   - warning-only findings (e.g. `DUPLICATE_LOINC_DIFF_SPECIMEN`) → included
-     and reported;
-   - not present in the active list → excluded as inactive.
+1. Reads the **whole catalog** (a single non-paginated document; every test,
+   active and inactive) and keeps only the **active** tests (`active` =
+   "Active"). The API does **not** expose panels as a list — there is no
+   `/rest/test-catalog/panels*` endpoint (those paths answer Tomcat 404), so the
+   import is **test-centric**.
+2. Groups tests under one `grp` per OpenELIS test **section**
+   (`testUnit`); the panel name each test reports is kept as informational
+   mapping data only.
 3. Creates/updates `procedure_type` rows per provider:
    ```
-   grp  OEP{providerId}-{panelId}   e.g. OEP2-5      (parent = 0, top-level)
-     ord OE{providerId}-T{testId}   e.g. OE2-T42     (hangs from its panel via parent)
+   grp  OEP{providerId}-SEC-{hash8}  e.g. OEP2-SEC-1a2b3c4d (parent = 0, top-level;
+                                     hash8 = first 8 hex of md5(lowercase section name),
+                                     stable across runs)
+     ord OE{providerId}-T{testId}    e.g. OE2-T42   (hangs from its section via parent)
    ```
-   `parent` references the panel group's **`procedure_type_id`** (AUTO_INCREMENT
+   `parent` references the section group's **`procedure_type_id`** (AUTO_INCREMENT
    primary key), not its code. Codes are deterministic per
-   `(provider, test)`/`(provider, panel)`, so re-importing is idempotent and
+   `(provider, test)`/`(provider, section)`, so re-importing is idempotent and
    never collides between labs. Names are truncated to the column's 63 chars
    without splitting words; uniqueness depends **only** on `procedure_code`.
 4. Generates one `mod_openelis_code_mapping` row per imported test with
-   `import_source = 'catalog_import'` and the LOINC code when available.
+   `import_source = 'catalog_import'` and the LOINC code when the catalog
+   provides it. `openelis_panel_id` carries the section group code and
+   `openelis_panel_name` the panel display string (informational in both cases).
 5. Extracts the **sample type** (`sampleType`) the REST payload carries per test
    and resolves it against the once-only translation table
    `mod_openelis_specimen_map` (below). The resolved SNOMED code is written to
@@ -294,14 +298,15 @@ Providers form, see `patches/procedure_provider_edit.php`) and:
 7. **Reconciliation (deactivate, never delete)**: on sync, provider-owned rows
    (`OE{p}-T*` ords and `OEP{p}-*` grps) that the catalog no longer references
    go to `activity = 0` and their auto mapping drops to `is_active = 0`. If a
-   test/panel comes back it is reactivated automatically (`activity = 1`, active
+   test/section comes back it is reactivated automatically (`activity = 1`, active
    mapping). Both transitions (deactivation and reactivation) are **reported in
-   the summary** — nothing happens silently. A test that **moves panels** is
-   re-hung automatically under its new panel (`parent` is reassigned every sync;
+   the summary** — nothing happens silently. A test that **moves sections** is
+   re-hung automatically under its new section (`parent` is reassigned every sync;
    it can never be orphaned while it exists). Safeguards: reconciliation only
-   runs when the read actually saw panels **and** tests; if any panel returned an
-   empty member list (possible transient failure) the test-deactivation pass is
-   skipped. A transient catalog error never deactivates pre-existing rows.
+   runs when the read actually saw sections **and** tests; a failed/empty catalog
+   read never deactivates pre-existing rows. Group rows left over from the **old
+   panel-based** scheme (`OEP{p}-{panelId}`) that no section matches are
+   deactivated the same way on the first run of the test-centric importer.
 
 ### 🧬 `mod_openelis_specimen_map` — sample type → SNOMED (once only)
 
@@ -585,12 +590,19 @@ This module follows OpenEMR's custom module standards:
 
 ### OpenELIS Global 2 Reference
 
-The test catalog is read over the HTTPS REST API (the lab provides only an API
-user/password, not database credentials):
+The catalog is read over the HTTPS REST API (the lab provides only an API
+user/password, not database credentials); both endpoints use Basic Auth with an
+OpenELIS user carrying the **ADMIN** role:
 
 | Endpoint | Method | Notes |
 |----------|--------|-------|
-| `/OpenELIS-Global/rest/TestNamesProvider?testId={id}` | GET | Returns one test's name (`name.spanish` / `name.english`) for a single numeric id. `testId=all` → HTTP 500, so ids are probed one by one across a configurable range. Does NOT return LOINC. |
+| `/OpenELIS-Global/rest/TestCatalog` | GET | **Catalog import (`CatalogApiClient`)** — returns the WHOLE test catalog in one document (`{ testCatalogList, testSectionList }`). Per test: id, localized name, section (`testUnit`), sampleType, panel (display string), loinc, uom, active ("Active"/"Not active"), orderable, sort order, result limits / dictionary values. No pagination and no panels list. |
+| `/OpenELIS-Global/rest/TestNamesProvider?testId={id}` | GET | Legacy single-name probe (`OpenElisCatalog`), kept only as fallback/reference: returns one test's name for a single numeric id. `testId=all` → HTTP 500, so id-probing is one id at a time. Does NOT return LOINC. |
+
+- OpenELIS does **not** expose panels as a list over REST: every
+  `/OpenELIS-Global/rest/test-catalog/panels*` path answers the Tomcat **404**
+  you see when a client assumes pa panel endpoint. Panel membership only appears
+  as a display string per test, which is why the import groups by section.
 
 - The local mirror table `mod_openelis_test_catalog` is kept fresh by the
   catalog import (`public/catalog_import.php` / `CatalogImportService`), which
@@ -599,8 +611,9 @@ user/password, not database credentials):
 - The mapping page (`public/admin_mapping.php`) reads that local mirror to
   autosuggest the OpenELIS test id/name when assigning a mapping — no per-keystroke
   API calls.
-- LOINC is not provided by this endpoint, so it is optional / entered manually
-  (or pre-suggested from `procedure_type.standard_code` in the mapping form).
+- LOINC comes from `GET /rest/TestCatalog` when it is configured on the OpenELIS
+  test; otherwise it stays optional — entered manually (or pre-suggested from
+  `procedure_type.standard_code` in the mapping form).
 - The prior design (reading OpenELIS's `clinlims.*` PostgreSQL tables directly)
   was abandoned because the lab does not share database credentials.
 
@@ -611,9 +624,9 @@ the deployed scripts (`catalog.csv` / `panels.csv`, via
 `src/Service/ProcedureCatalogImporter.php`) from the **OpenELIS Settings** page.
 That page, the CSV importer class and the sample files have been **removed**.
 The REST-based import in [`catalog_import.php`](#-catalog-import-rest--catalog_importphp)
-covers the same goal (panels + ordered tests → `procedure_type` tree +
-`mod_openelis_code_mapping`) using each provider's ADMIN catalog credentials,
-without requiring database access or CSV exports.
+covers the same goal (active tests grouped by test section → `procedure_type`
+tree + `mod_openelis_code_mapping`) using each provider's ADMIN catalog
+credentials, without requiring database access or CSV exports.
 
 ### OpenELIS FHIR Capability Reference
 

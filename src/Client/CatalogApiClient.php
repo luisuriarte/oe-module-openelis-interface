@@ -8,14 +8,19 @@ namespace OpenEMR\Modules\OpenElis\Client;
  * ENDPOINTS (require an OpenELIS user with the ADMIN role — different from the
  * Analyser Import user used for FHIR orders):
  *
- *   GET /OpenELIS-Global/rest/test-catalog/panels?includeInactive=false
- *   GET /OpenELIS-Global/rest/test-catalog/panels/{panelId}/test-order
- *   GET /OpenELIS-Global/rest/test-catalog/tests?status=active&pageSize=N
+ *   GET /OpenELIS-Global/rest/TestCatalog
+ *
+ *   The classic catalog endpoint: returns the WHOLE test catalog in a single
+ *   non-paginated JSON document ({ testCatalogList: [...], testSectionList:
+ *   [...] }). Each entry carries id, localized name, section (testUnit),
+ *   sampleType, loinc, uom and the active/orderable flags. OpenELIS does NOT
+ *   expose panels as a list over REST — panel membership only appears as a
+ *   display string per test — so the catalog import groups tests by section.
  *
  * WHY A SEPARATE CLIENT (AND NOT OpenElisApiClient)
  *   OpenElisApiClient is bound to FHIR (Content-Type: application/fhir+json,
  *   base path /OpenELIS-Global/fhir/, Host header fixed to elis.origen.ar).
- *   The test-catalog API is plain REST JSON under the /OpenELIS-Global/rest/
+ *   The catalog API is plain REST JSON under the /OpenELIS-Global/rest/
  *   path, uses application/json and — importantly — different credentials
  *   (the ADMIN catalog user). Keeping them apart avoids mixing credential
  *   sets between the send flow (Analyser Import) and the catalog import.
@@ -30,13 +35,12 @@ class CatalogApiClient
 {
     private const DEFAULT_HOST_HEADER = 'elis.origen.ar';
     private const DEFAULT_ORIGIN = 'https://127.0.0.1:8443';
-    private const BASE_PATH = '/OpenELIS-Global/rest/test-catalog';
+    private const BASE_PATH = '/OpenELIS-Global/rest';
 
     private string $baseUrl;
     private string $login;
     private string $password;
     private string $hostHeader;
-    private int $maxPages = 100;
 
     public function __construct(string $remoteHost, string $login, string $password)
     {
@@ -47,106 +51,27 @@ class CatalogApiClient
     }
 
     /**
-     * List panels (optionally including inactive ones).
+     * Fetch the full test catalog in one shot.
      *
-     * @return array  Raw panel items as returned by the API (id/name/... keys)
+     * The classic catalog endpoint returns the entire catalog as one JSON
+     * document ({ testCatalogList, testSectionList }). No pagination and no
+     * separate panels endpoint: every active AND inactive test is present, and
+     * the caller filters by the `active` flag ("Active"/"Not active") it
+     * reports per entry.
+     *
+     * @return array  Raw catalog items as returned by the API (id/localization/
+     *                testUnit/sampleType/loinc/uom/active/... keys)
      */
-    public function listPanels(bool $includeInactive = false): array
+    public function listCatalog(): array
     {
-        $data = $this->request('panels', [
-            'includeInactive' => $includeInactive ? 'true' : 'false',
-        ]);
+        $data = $this->request('TestCatalog');
         return self::extractItems($data);
-    }
-
-    /**
-     * List the ordered tests that belong to a single panel.
-     *
-     * @param string $panelId
-     * @return array  Raw test items (testId/name/... keys)
-     */
-    public function listPanelTests(string $panelId): array
-    {
-        $data = $this->request('panels/' . rawurlencode($panelId) . '/test-order');
-        return self::extractItems($data);
-    }
-
-    /**
-     * List active tests, following pagination until every page is consumed.
-     *
-     * The endpoint returns a page-shaped JSON document (Spring-style) with a
-     * `total` and a collection under one of {rows, content, records, items,
-     * tests, testItems, elements}. We loop page by page until we collected
-     * `total` items (or a page comes back short when `total` is absent).
-     *
-     * @param int $pageSize
-     * @return array  Raw test items (id/name/loinc/errorCount/findings/... keys)
-     */
-    public function listActiveTests(int $pageSize = 500): array
-    {
-        return $this->listActiveTestsWithMeta($pageSize)['tests'];
-    }
-
-    /**
-     * Like listActiveTests() but also returns the aggregate counts the API
-     * reports at the root of the first page (totalErrors / totalWarnings /
-     * totalWithIssues), so an importer can show a roll-up summary.
-     *
-     * @return array ['tests' => array, 'meta' => array]
-     */
-    public function listActiveTestsWithMeta(int $pageSize = 500): array
-    {
-        $all = [];
-        $total = null;
-        $meta = [
-            'total' => null,
-            'totalErrors' => null,
-            'totalWarnings' => null,
-            'totalWithIssues' => null,
-            'totalInfo' => null,
-        ];
-
-        for ($page = 0; $page < $this->maxPages; $page++) {
-            $data = $this->request('tests', [
-                'status' => 'active',
-                'page' => $page,
-                'pageSize' => $pageSize,
-            ]);
-
-            if ($page === 0) {
-                foreach (array_keys($meta) as $key) {
-                    if (isset($data[$key])) {
-                        $meta[$key] = (int)$data[$key];
-                    }
-                }
-            }
-
-            $pageInfo = self::extractPage($data);
-            $items = $pageInfo['items'];
-            if ($total === null && $pageInfo['total'] !== null) {
-                $total = $pageInfo['total'];
-                $meta['total'] = $total;
-            }
-
-            $all = array_merge($all, $items);
-
-            // Stop when we have everything the API told us about, or when a
-            // page came back short (not enough data to fill another page).
-            if ($total !== null && count($all) >= $total) {
-                break;
-            }
-            if (count($items) < $pageSize) {
-                break;
-            }
-        }
-
-        return ['tests' => $all, 'meta' => $meta];
     }
 
     /**
      * Execute a GET against the catalog API.
      *
-     * @param string $path   Path relative to .../rest/test-catalog/
+     * @param string $path   Path relative to .../rest/ (e.g. "TestCatalog")
      * @param array  $params Query parameters
      * @return array         Decoded JSON, or [] on empty body
      */
@@ -195,7 +120,7 @@ class CatalogApiClient
 
     /**
      * Pull the item collection out of a response in any of the shapes the
-     * endpoint may use (Spring Page wrapper, bare list, or empty).
+     * endpoint may use (envelope key, Spring Page wrapper, bare list, or empty).
      *
      * @param array $data
      * @return array
@@ -206,11 +131,11 @@ class CatalogApiClient
     }
 
     /**
-     * Normalize a page-shaped response into ['items' => array, 'total' => ?int].
+     * Normalize a response into ['items' => array, 'total' => ?int].
      *
-     * The OpenELIS test-catalog API returns the active-tests page as
-     * {"page", "pageSize", "total", "rows": [...], "totalErrors", ...}, while
-     * panels/panel-test-order come back under other collection keys — all the
+     * The classic catalog endpoint nests its items under `testCatalogList`
+     * (with a bare list accepted as well), while a Spring-style paged document
+     * would carry them under `rows`/`content`/... next to a `total`. All the
      * candidate keys below are accepted so both shapes work.
      *
      * @param array $data
@@ -218,7 +143,7 @@ class CatalogApiClient
      */
     private static function extractPage(array $data): array
     {
-        foreach (['content', 'records', 'items', 'tests', 'testItems', 'elements', 'rows'] as $key) {
+        foreach (['testCatalogList', 'content', 'records', 'items', 'tests', 'testItems', 'elements', 'rows'] as $key) {
             if (isset($data[$key]) && is_array($data[$key])) {
                 $total = isset($data['total']) ? (int)$data['total'] : null;
                 if ($total === 0) {

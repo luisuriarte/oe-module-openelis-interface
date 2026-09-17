@@ -4,19 +4,21 @@
  * Standalone probe for the OpenELIS Global 2 test-catalog REST API.
  *
  * Not part of the module repo. Runs against the REAL server with the catalog
- * ADMIN credentials and does three things:
+ * ADMIN credentials and does two things:
  *
- *   1. Raw calls to the 3 endpoints, dumping the FIRST response's structure
- *      (keys present + value types).
+ *   1. A raw call to GET /OpenELIS-Global/rest/TestCatalog, dumping the
+ *      response's structure (keys present + value types).
  *   2. Explicit comparison against what CatalogApiClient / CatalogImportService
  *      expect to parse (fixed candidate-key lists), flagging DISCREPANCIES.
- *   3. Real pagination test: when the active-tests endpoint reports total > 500
- *      (pageSize), verifies our page-by-page loop in CatalogApiClient fetches
- *      every remaining page (not just the mock scenario).
+ *
+ * The classic TestCatalog endpoint returns the WHOLE catalog in one document
+ * ({ testCatalogList: [...], testSectionList: [...] }): no pagination and no
+ * panels list (the /rest/test-catalog/panels* paths do not exist — trying them
+ * yields the Tomcat 404 that this probe used to hit).
  *
  * CREDENTIALS (never hardcoded):
  *     env  OPENELIS_PROBE_HOST | OPENELIS_PROBE_LOGIN | OPENELIS_PROBE_PASSWORD
- *   or argv: php probe_catalog_api.php <host> <login> <password> [pageSize]
+ *   or argv: php probe_catalog_api.php <host> <login> <password>
  *
  * host defaults to https://127.0.0.1:8443
  */
@@ -35,10 +37,9 @@ use OpenEMR\Modules\OpenElis\Client\CatalogApiClient;
 $host      = $argv[1] ?? getenv('OPENELIS_PROBE_HOST')    ?: 'https://127.0.0.1:8443';
 $login     = $argv[2] ?? getenv('OPENELIS_PROBE_LOGIN');
 $password  = $argv[3] ?? getenv('OPENELIS_PROBE_PASSWORD');
-$pageSize  = (int)($argv[4] ?? 500);
 
 if ($login === false || $password === false) {
-    fwrite(STDERR, "Usage: php probe_catalog_api.php <host> <login> <password> [pageSize]\n");
+    fwrite(STDERR, "Usage: php probe_catalog_api.php <host> <login> <password>\n");
     fwrite(STDERR, "  or export OPENELIS_PROBE_HOST/OPENELIS_PROBE_LOGIN/OPENELIS_PROBE_PASSWORD\n");
     exit(2);
 }
@@ -157,13 +158,14 @@ function findCollection(array $doc, array $candidateKeys): array
 
 /**
  * Compare an item against the candidate-key lists the service parses with
- * (CatalogImportService::pick). Verdict: which code key / name key won.
+ * (CatalogImportService::pick / ingest code). Verdict: which code key / name
+ * key won, and whether the active flag is present in a recognizable shape.
  */
 function dumpItemKeys(array $item, string $context): void
 {
     $codeKeys = ['test_id', 'testId', 'id'];
-    $nameKeys = ['test_name', 'testName', 'name', 'name_en', 'name_es'];
-    $support  = ['loinc', 'loinc_code', 'loincCode', 'errorCount', 'error_count', 'errors', 'findings'];
+    $nameKeys = ['test_name', 'testName', 'name', 'name_en', 'name_es', 'localization'];
+    $support  = ['loinc', 'loinc_code', 'loincCode', 'sampleType', 'sample_type', 'testUnit', 'panel', 'uom', 'active', 'testSortOrder'];
 
     foreach ([$codeKeys, $nameKeys] as $keys) {
         $label = $keys === $codeKeys ? 'code' : 'name';
@@ -180,14 +182,18 @@ function dumpItemKeys(array $item, string $context): void
         }
     }
 
-    $errorCount = $item['errorCount'] ?? $item['error_count'] ?? $item['errors'] ?? null;
-    if ($errorCount !== null && !is_int($errorCount) && !is_string($errorCount)) {
-        disc("$context: errorCount is not scalar (" . typeOf($errorCount) . ')');
+    foreach ($support as $k) {
+        if (array_key_exists($k, $item)) {
+            ok("$context: $k present: " . typeOf($item[$k]));
+        } else {
+            disc("$context: expected field `$k` NOT present");
+        }
     }
 
-    $findings = $item['findings'] ?? null;
-    if ($findings !== null && !is_array($findings)) {
-        disc("$context: findings is " . typeOf($findings) . ' (service expects array)');
+    $active = $item['active'] ?? null;
+    if ($active !== null && !is_bool($active) && !is_numeric($active)
+        && !in_array(strtolower(trim((string)$active)), ['active', 'not active'], true)) {
+        disc("$context: `active` has an unrecognized shape (" . typeOf($active) . ')');
     }
 }
 
@@ -196,188 +202,87 @@ function dumpItemKeys(array $item, string $context): void
 // ---------------------------------------------------------------------------
 $origin     = probeOrigin($host);
 $hostHeader = probeHostHeader($host);
-$base       = $origin . '/OpenELIS-Global/rest/test-catalog/';
-line('=== RAW probe: ' . $base . '  (Host: ' . $hostHeader . ') ===');
+$url        = $origin . '/OpenELIS-Global/rest/TestCatalog';
+line('=== RAW probe: ' . $url . '  (Host: ' . $hostHeader . ') ===');
 line('');
 
-// -- 1. /panels?includeInactive=false ---------------------------------------
-$url = $base . 'panels?includeInactive=false';
 $raw = rawRequest($url, $login, $password, $hostHeader);
 if ($raw['status'] >= 400) {
-    line("✗ /panels HTTP " . $raw['status'] . ": " . mb_substr($raw['body'], 0, 400));
+    line('✗ /rest/TestCatalog HTTP ' . $raw['status'] . ': ' . mb_substr($raw['body'], 0, 400));
     exit(1);
 }
 $doc = json_decode($raw['body'], true);
 if (!is_array($doc)) {
-    disc('/panels response is not JSON: ' . mb_substr($raw['body'], 0, 200));
+    disc('/rest/TestCatalog response is not JSON: ' . mb_substr($raw['body'], 0, 200));
     $doc = [];
 }
-dumpTopLevel($doc, '/panels');
-$panels = findCollection($doc, ['content', 'records', 'items', 'panels', 'elements']);
-line('  panels collection key: ' . ($panels['key'] ?? 'MISSING'));
-if ($panels['key'] === null && $panels['items'] === []) {
-    disc('/panels has no recognizable collection');
-} elseif ($panels['items'] !== []) {
-    dumpItemKeys($panels['items'][0], 'panel[0]');
-    line('  panels count: ' . count($panels['items']));
-}
-$panelItems = $panels['items'];
-
-// -- 2. /panels/{id}/test-order (first panel) --------------------------------
-$panelId = null;
-$panelIdKeys = ['panel_id', 'id', 'guid', 'code'];
-foreach ($panelItems as $p) {
-    foreach ($panelIdKeys as $k) {
-        if (!empty($p[$k])) {
-            $panelId = (string)$p[$k];
-            break 2;
-        }
-    }
-}
-line('');
-if ($panelId === null) {
-    disc('/panels: cannot determine a panel id for /test-order probe');
-} else {
-    $url = $base . 'panels/' . rawurlencode($panelId) . '/test-order';
-    $raw = rawRequest($url, $login, $password, $hostHeader);
-    if ($raw['status'] >= 400) {
-        line("✗ /panels/$panelId/test-order HTTP " . $raw['status'] . ": " . mb_substr($raw['body'], 0, 400));
-        exit(1);
-    }
-    $doc = json_decode($raw['body'], true);
-    if (!is_array($doc)) {
-        disc('/test-order response is not JSON');
-        $doc = [];
-    }
-    dumpTopLevel($doc, "/panels/$panelId/test-order");
-    $members = findCollection($doc, ['content', 'records', 'items', 'tests', 'testItems', 'elements']);
-    line('  member collection key: ' . ($members['key'] ?? 'MISSING'));
-    if ($members['key'] === null && $members['items'] === []) {
-        disc('/test-order has no recognizable collection');
-    } elseif ($members['items'] !== []) {
-        dumpItemKeys($members['items'][0], 'member[0]');
-        line('  members count: ' . count($members['items']));
-    }
-}
-
-// -- 3. /tests?status=active&pageSize=N, including pagination loop ----------
-line('');
-$url = $base . 'tests?status=active&page=' . 0 . '&pageSize=' . $pageSize;
-$raw = rawRequest($url, $login, $password, $hostHeader);
-if ($raw['status'] >= 400) {
-    line("✗ /tests HTTP " . $raw['status'] . ": " . mb_substr($raw['body'], 0, 400));
+dumpTopLevel($doc, '/rest/TestCatalog');
+$catalog = findCollection($doc, ['testCatalogList', 'content', 'records', 'items', 'tests', 'testItems', 'elements', 'rows']);
+line('  catalog collection key: ' . ($catalog['key'] ?? 'MISSING'));
+if ($catalog['key'] === null && $catalog['items'] === []) {
+    disc('/rest/TestCatalog has no recognizable collection');
     exit(1);
 }
-$doc = json_decode($raw['body'], true);
-if (!is_array($doc)) {
-    disc('/tests response is not JSON');
-    $doc = [];
-}
-dumpTopLevel($doc, '/tests (page 0)');
-$page = findCollection($doc, ['content', 'records', 'items', 'rows', 'tests', 'testItems', 'elements']);
-line('  tests collection key: ' . ($page['key'] ?? 'MISSING') . '   total=' . var_export($page['total'], true));
-if ($page['key'] === null && $page['items'] === []) {
-    disc('/tests has no recognizable collection');
-    exit(1);
-}
-if ($page['items'] !== []) {
-    dumpItemKeys($page['items'][0], 'test[0]');
+if ($catalog['items'] !== []) {
+    dumpItemKeys($catalog['items'][0], 'test[0]');
+    line('  catalog count: ' . count($catalog['items']) . ' (all tests: active + inactive)');
 }
 
-// -- Real pagination: fetch ALL pages manually and compare with the client ---
-$all = [];
-$total = $page['total'];
-$maxPages = 100;
-for ($p = 0; $p < $maxPages; $p++) {
-    $url = $base . 'tests?status=active&page=' . $p . '&pageSize=' . $pageSize;
-    $raw = rawRequest($url, $login, $password, $hostHeader);
-    if ($raw['status'] >= 400) {
-        disc('/tests page ' . $p . ' HTTP ' . $raw['status']);
-        break;
+// ---------------------------------------------------------------------------
+// Active-only view and comparison against the real client
+// ---------------------------------------------------------------------------
+$active = array_values(array_filter((array)$catalog['items'], static function ($t): bool {
+    if (!is_array($t)) {
+        return false;
     }
-    $doc = json_decode($raw['body'], true);
-    $pg = is_array($doc) ? findCollection($doc, ['content', 'records', 'items', 'rows', 'tests', 'testItems', 'elements']) : ['items' => [], 'total' => null];
-    if ($total === null && $pg['total'] !== null) {
-        $total = $pg['total'];
+    $flag = $t['active'] ?? null;
+    if (is_bool($flag)) {
+        return $flag;
     }
-    $all = array_merge($all, $pg['items']);
-    if ($total !== null && count($all) >= $total) {
-        break;
+    if (is_numeric($flag)) {
+        return (int)$flag === 1;
     }
-    if (count($pg['items']) < $pageSize) {
-        break;
-    }
-}
-line('');
-line("== PAGINATION (pageSize=$pageSize) ==");
-line('  total reported by API:  ' . var_export($total, true));
-line('  pages fetched in loop:  ' . ($p + 1));
-line('  items collected:        ' . count($all));
+    return strtolower(trim((string)$flag)) === 'active';
+}));
+line('  active tests: ' . count($active) . ' of ' . count($catalog['items']));
 
-if ($total !== null && count($all) > $pageSize) {
-    ok('pagination stressed with real data (' . count($all) . ' > ' . $pageSize . ')');
-} elseif ($total !== null && count($all) > 0) {
-    line('  note: only ' . count($all) . " active tests — pagination not stressed (total <= pageSize), but the short-page stop worked");
-}
-if ($total !== null && count($all) < $total) {
-    disc('collected ' . count($all) . ' of ' . $total . ' — page loop stopped early');
+$rawIds = [];
+foreach ($active as $t) {
+    $id = $t['test_id'] ?? $t['testId'] ?? $t['id'] ?? null;
+    if ($id !== null) {
+        $rawIds[(string)$id] = true;
+    }
 }
 
-// -- Same data through CatalogApiClient (the real client) -------------------
 line('');
 line('== CatalogApiClient (real client code) ==');
 $client = new CatalogApiClient($host, $login, $password);
-$cPanels = $client->listPanels(false);
-$cTests = null;
 try {
-    $cTests = $client->listActiveTests($pageSize);
-    line('  listActiveTests      -> ' . count($cTests) . ' tests');
+    $cliCatalog = $client->listCatalog();
+    line('  listCatalog          -> ' . count($cliCatalog) . ' raw items (active + inactive)');
 } catch (Throwable $e) {
-    disc('listActiveTests threw: ' . $e->getMessage());
+    disc('listCatalog threw: ' . $e->getMessage());
+    exit(1);
 }
-line('  listPanels            -> ' . count($cPanels) . ' panels');
 
-$rawIds = [];
-foreach ($all as $t) {
-    $id = $t['test_id'] ?? $t['testId'] ?? $t['id'] ?? null;
-    if ($id !== null) { $rawIds[(string)$id] = true; }
-}
 $cliIds = [];
-foreach ((array)$cTests as $t) {
+foreach ((array)$cliCatalog as $t) {
     $id = $t['test_id'] ?? $t['testId'] ?? $t['id'] ?? null;
-    if ($id !== null) { $cliIds[(string)$id] = true; }
+    if ($id !== null) {
+        $cliIds[(string)$id] = true;
+    }
 }
 if ($rawIds !== [] && $cliIds !== []) {
     $missing = array_diff_key($rawIds, $cliIds);
     $extra   = array_diff_key($cliIds, $rawIds);
     if ($missing === [] && $extra === []) {
-        ok('client test-id set matches raw paginated set exactly (' . count($cliIds) . ' ids)');
+        ok('client test-id set matches raw catalog set exactly (' . count($cliIds) . ' ids)');
     } else {
         if ($missing !== []) { disc((count($missing)) . ' ids missing from client list'); }
         if ($extra  !== []) { disc((count($extra)) . ' extra ids in client list'); }
     }
-}
-
-if ($panelId !== null) {
-    $cMembers = $client->listPanelTests($panelId);
-    line('  listPanelTests(' . $panelId . ') -> ' . count($cMembers) . ' members');
-    if ($members['items'] !== []) {
-        $rawMemberIds = [];
-        foreach ($members['items'] as $m) {
-            $id = $m['test_id'] ?? $m['testId'] ?? $m['id'] ?? null;
-            if ($id !== null) { $rawMemberIds[(string)$id] = true; }
-        }
-        $cliMemberIds = [];
-        foreach ($cMembers as $m) {
-            $id = $m['test_id'] ?? $m['testId'] ?? $m['id'] ?? null;
-            if ($id !== null) { $cliMemberIds[(string)$id] = true; }
-        }
-        if ($rawMemberIds !== [] && $rawMemberIds == $cliMemberIds) {
-            ok('client panel-member set matches raw set (' . count($cliMemberIds) . ' ids)');
-        } else {
-            disc('panel-member sets diverge between raw and client');
-        }
-    }
+} else {
+    disc('could not compare id sets (raw=' . count($rawIds) . ', client=' . count($cliIds) . ')');
 }
 
 line('');

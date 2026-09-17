@@ -5,48 +5,53 @@ namespace OpenEMR\Modules\OpenElis\Service;
 use OpenEMR\Modules\OpenElis\Client\CatalogApiClient;
 
 /**
- * Imports the OpenELIS test catalog (panels + ordered tests) into OpenEMR
- * from the REST test-catalog API, per lab provider.
+ * Imports the OpenELIS test catalog into OpenEMR from the REST catalog API,
+ * per lab provider.
+ *
+ * SOURCE
+ *   A single GET /OpenELIS-Global/rest/TestCatalog returns the WHOLE catalog
+ *   as one non-paginated document. OpenELIS does NOT expose panels as a list
+ *   over REST (a telltale 404 from any /test-catalog/panels path), so the
+ *   import is TEST-CENTRIC and groups tests under one grp per OpenELIS test
+ *   SECTION (testUnit); the panel name each test reports is kept as
+ *   informational mapping data only.
  *
  * WHAT IT DOES
  *   For a single procedure_providers row (a lab):
- *     1. Reads the active panels and, per panel, the ordered tests.
- *     2. Cross-checks every panel member against the active-tests list
- *        (errorCount / findings):
- *          - errorCount > 0  OR any ERROR finding          -> EXCLUDED (e.g. an
- *            orphan test missing its sample-type link, SAMPLE_TYPE_LINKS).
- *          - WARNING-only findings (e.g. DUPLICATE_LOINC_DIFF_SPECIMEN) ->
- *            INCLUDED but reported so the admin is aware.
- *          - not present in the active list                 -> EXCLUDED (inactive).
-* 3. Creates/updates OpenEMR procedure_type rows:
-     *          grp  OEP{providerId}-{panelId}   ... one per panel (parent = 0, top)
-     *            ord OE{providerId}-T{testId}   ... one per valid test, hanging
-     *                                              from its panel via `parent`
-     *        and a mod_openelis_code_mapping row per test (import_source =
-     *        'catalog_import') so the imported codes are immediately sendable.
-*     4. For every test, extracts the catalog's sample type NAME
+ *     1. Reads the whole catalog and keeps the ACTIVE tests (active flag =
+ *        "Active"), ignoring inactive ones.
+ *     2. Creates/updates OpenEMR procedure_type rows:
+ *          grp  OEP{providerId}-SEC-{hash}  ... one per section (parent = 0, top)
+ *            ord OE{providerId}-T{testId}   ... one per active test, hanging
+ *                                              from its section via `parent`
+ *        and a mod_openelis_code_mapping row per test (import_source =
+ *        'catalog_import') so the imported codes are immediately sendable.
+ *     3. For every test, extracts the catalog's sample type NAME
  *        (sampleType in the REST payload) and resolves it to a SNOMED-CT
  *        specimen code through mod_openelis_specimen_map. The resolved code
  *        is stored on the mapping row (snomed_specimen); sample types with
  *        no code yet are auto-INSERTed into the map (snomed_code NULL) and
  *        reported under the summary's `specimen_unmapped`, so that missing
  *        codes surface as a one-time curation task instead of a silent gap.
- *     5. DISPLAY SUFFIX: every imported grp/ord row carries the provider name
+ *     4. DISPLAY SUFFIX: every imported grp/ord row carries the provider name
  *        as a visible suffix (`{Test} · {Lab}`) so that the same analysis
  *        ordered from different labs is distinguishable in OpenEMR's native
  *        procedure picker. The mapping row's openemr_procedure_name and the
  *        autosuggest mirror keep the CLEAN test name (never the suffix).
- *     6. RECONCILIATION: module-owned rows of THIS provider (OE{p}-T* ords and
+ *     5. RECONCILIATION: module-owned rows of THIS provider (OE{p}-T* ords and
  *        OEP{p}-* grps) that this import no longer references are DEACTIVATED
  *        (activity = 0) — never deleted — and their auto mappings pass to
  *        is_active = 0. Rows that come back (activity 0 -> 1) are logged as
  *        reactivated. Both transitions are reported in the summary so no test
  *        silently appears or disappears from the orderable tree. A dry-run
- *        previews what would change without writing anything.
+ *        previews what would change without writing anything. Group rows from
+ *        the OLD panel-based scheme (OEP{p}-{panelId}) that no longer match a
+ *        section are deactivated the same way.
  *
  * CODE SCHEME (deterministic / idempotent, never collides across labs)
- *   OE{providerId}-T{testId}   e.g. OE2-T42
- *   OEP{providerId}-{panelId}  e.g. OEP2-5
+ *   OE{providerId}-T{testId}          e.g. OE2-T42
+ *   OEP{providerId}-SEC-{hash8}       e.g. OEP2-SEC-1a2b3c4d  (hash of the
+ *                                     lowercase section name, stable across runs)
  *   procedure_code is the ONLY thing that must be unique; `name` is display
  *   only (and truncated to the column's 63 chars).
  *
@@ -97,7 +102,7 @@ class CatalogImportService
      * @return array  Summary:
      *                [
      *                  provider_id, provider_name, dry_run,
-     *                  panels => int,
+     *                  panels => int (test sections, one grp each),
      *                  tests_imported => int,
      *                  excluded_by_error => [testId => ['name','messages']],
      *                  inactive_missing => [testId => ['name','messages']],
@@ -111,9 +116,7 @@ class CatalogImportService
      *                  deactivated_tests  => [code => name],
      *                  reactivated_panels => [code => name],
      *                  reactivated_tests  => [code => name],
-     *                  catalog_total, catalog_totalErrors,
-     *                  catalog_totalWarnings, catalog_totalWithIssues,
-     *                  catalog_totalInfo (optional, from listActiveTestsWithMeta)
+     *                  catalog_total (number of active tests seen)
      *                ]
      * @throws \RuntimeException  On validation, HTTP/auth or write failures.
      */
@@ -161,22 +164,44 @@ class CatalogImportService
             'reactivated_tests' => [],
         ];
 
-        $panels = $client->listPanels(false);
+        // ONE call to the classic catalog REST endpoint returns the WHOLE test
+        // catalog in a single non-paginated document (the API does not expose a
+        // panels list). The import is therefore test-centric: active tests are
+        // grouped under one grp per OpenELIS test section (testUnit), and the
+        // panel name the catalog reports per test is kept as informational data.
+        $catalog = $client->listCatalog();
 
-        // Use the aggregation-aware variant when the client provides it, so we
-        // can surface the API's roll-up counts (totalErrors/totalWarnings/...)
-        // in the import summary. Falls back to the plain list otherwise.
-        if (method_exists($client, 'listActiveTestsWithMeta')) {
-            $active = $client->listActiveTestsWithMeta();
-            $activeTests = $this->indexActiveTests($active['tests']);
-            foreach (['total', 'totalErrors', 'totalWarnings', 'totalWithIssues', 'totalInfo'] as $k) {
-                if (isset($active['meta'][$k]) && $active['meta'][$k] !== null) {
-                    $summary['catalog_' . $k] = $active['meta'][$k];
-                }
+        $sections = [];
+        $activeCount = 0;
+        foreach ($catalog as $raw) {
+            $testId = $this->pick($raw, ['test_id', 'testId', 'id']);
+            if ($testId === null || $testId === '') {
+                continue;
             }
-        } else {
-            $activeTests = $this->indexActiveTests($client->listActiveTests());
+            if (!$this->isActiveFlag($raw['active'] ?? null)) {
+                continue;
+            }
+            $activeCount++;
+            $testName = $this->pick($raw, ['test_name', 'testName', 'name', 'name_en', 'name_es', 'localization'])
+                ?? ('Test ' . $testId);
+            $sectionName = $this->sectionName((string)($raw['testUnit'] ?? ''));
+            $key = $this->sectionKey($sectionName);
+            $test = [
+                'test_id' => $testId,
+                'name' => $testName,
+                'loinc' => $this->pickStr($raw, ['loinc', 'loinc_code', 'loincCode']) ?? '',
+                'sample_type' => $this->pickStr($raw, ['sampleType', 'sample_type', 'typeOfSample', 'sample']) ?? '',
+                'panel' => $this->panelString((string)($raw['panel'] ?? '')),
+                'sort_order' => (int)($raw['testSortOrder'] ?? 0),
+            ];
+            if (!isset($sections[$key])) {
+                $sections[$key] = ['name' => $sectionName, 'tests' => []];
+            }
+            $sections[$key]['tests'][] = $test;
         }
+        ksort($sections, SORT_STRING);
+
+        $summary['catalog_total'] = $activeCount;
 
         $started = false;
         if (!$dryRun) {
@@ -188,40 +213,23 @@ class CatalogImportService
             $panelSeq = 0;
             $seenPanelCodes = [];
             $seenTestCodes = [];
-            $emptyMembersPanels = [];
-            foreach ($panels as $panel) {
+            foreach ($sections as $section) {
                 $panelSeq++;
-                $panelId = $this->pick($panel, ['panel_id', 'id', 'guid', 'code']);
-                if ($panelId === null || $panelId === '') {
-                    continue;
-                }
-                $panelName = $this->pick($panel, ['panel_name', 'name', 'name_en', 'name_es'])
-                    ?? ('Panel ' . $panelId);
-
-                $members = $client->listPanelTests($panelId);
-                if (empty($members)) {
-                    // A transient empty member list must never look like the
-                    // whole panel vanished: record it so reconcileAbsent() can
-                    // skip (safe) the test deactivation pass.
-                    $emptyMembersPanels[] = (string)$panelId;
-                    continue;
-                }
-
                 // IMPORTANT: `parent` on procedure_type references the real
                 // procedure_type_id (the AUTO_INCREMENT primary key) of the
-                // panel grp — NOT its procedure_code. upsertGroup() returns
+                // section grp — NOT its procedure_code. upsertGroup() returns
                 // that id and each ord hangs from it.
-                $panelCode = $this->panelCode($providerId, $panelId);
-                $panelDisplayName = $this->displayName($panelName, $providerName);
+                $sectionCode = $this->sectionCode($providerId, $section['name']);
+                $sectionDisplayName = $this->displayName($section['name'], $providerName);
                 $grpResult = $this->upsertGroup(
-                    $panelCode,
-                    $panelDisplayName,
+                    $sectionCode,
+                    $sectionDisplayName,
                     $providerId,
                     $panelSeq,
                     $dryRun
                 );
                 $grpId = $grpResult['id'];
-                $seenPanelCodes[$panelCode] = true;
+                $seenPanelCodes[$sectionCode] = true;
 
                 $summary['panels']++;
                 if ($grpResult['created']) {
@@ -230,54 +238,32 @@ class CatalogImportService
                     $summary['groups_updated']++;
                 }
                 if ($grpResult['reactivated']) {
-                    $summary['reactivated_panels'][$panelCode] = $panelDisplayName;
+                    $summary['reactivated_panels'][$sectionCode] = $sectionDisplayName;
                 }
 
-                $ordSeq = 0;
-                foreach ($members as $member) {
-                    $ordSeq++;
-                    $testId = $this->pick($member, ['test_id', 'testId', 'id']);
-                    if ($testId === null || $testId === '') {
-                        continue;
+                $members = $section['tests'];
+                usort($members, static function (array $a, array $b): int {
+                    $byOrder = ($a['sort_order'] <=> $b['sort_order']);
+                    if ($byOrder !== 0) {
+                        return $byOrder;
                     }
-                    $testName = $this->pick($member, ['test_name', 'testName', 'name', 'name_en', 'name_es'])
-                        ?? ('Test ' . $testId);
+                    return strcasecmp($a['name'], $b['name']);
+                });
 
-                    // Every test referenced by a panel counts as "seen" — even
-                    // the ones excluded/flagged later — so a transient catalog
-                    // error never deactivates a previously-imported row.
+                $ordSeq = 0;
+                foreach ($members as $test) {
+                    $ordSeq++;
+                    $testId = $test['test_id'];
+                    $testName = $test['name'];
+                    $loinc = (string)$test['loinc'];
+                    $sampleType = (string)$test['sample_type'];
+                    $panelName = (string)$test['panel'];
+
+                    // Every active test counts as "seen" — even the ones with a
+                    // manual-mapping conflict below — so a transient catalog
+                    // read error never deactivates a previously-imported row.
                     $code = $this->testCode($providerId, $testId);
                     $seenTestCodes[$code] = true;
-
-                    $active = $activeTests[$testId] ?? null;
-                    if ($active === null) {
-                        $summary['inactive_missing'][$testId] = [
-                            'name' => $testName,
-                            'messages' => [
-                                "Test is referenced by panel {$panelId} ({$panelName}) but is not in the active tests list.",
-                            ],
-                        ];
-                        continue;
-                    }
-
-                    $classification = $this->classify($active);
-                    $loinc = $this->pickStr($active, ['loinc', 'loinc_code', 'loincCode']);
-                    $sampleType = (string)($active['sample_type'] ?? '');
-
-                    if ($classification['error']) {
-                        $summary['excluded_by_error'][$testId] = [
-                            'name' => $testName,
-                            'messages' => $classification['messages'],
-                        ];
-                        continue;
-                    }
-
-                    if ($classification['warning']) {
-                        $summary['tests_with_warnings'][$testId] = [
-                            'name' => $testName,
-                            'messages' => $classification['messages'],
-                        ];
-                    }
 
                     // Resolve the OpenELIS sample type NAME to a SNOMED-CT code
                     // via the once-only translation table. Unmapped sample types
@@ -306,8 +292,8 @@ class CatalogImportService
                     }
 
                     // Conflict: a human already mapped this (provider, test)
-                    // manually. Refresh its panel metadata only, never the
-                    // mapping itself, and skip creating an auto row.
+                    // manually. Refresh its section/panel metadata only, never
+                    // the mapping itself, and skip creating an auto row.
                     $manual = $this->findManualMapping($providerId, $testId);
                     if ($manual !== null) {
                         $summary['conflicts'][$testId] = [
@@ -320,7 +306,12 @@ class CatalogImportService
                                 "UPDATE mod_openelis_code_mapping
                                  SET openelis_panel_id = ?, openelis_panel_name = ?, imported_at = ?
                                  WHERE id = ?",
-                                [$panelId, $this->truncateName($panelName, 255), date('Y-m-d H:i:s'), (int)$manual['id']]
+                                [
+                                    $sectionCode,
+                                    $this->truncateName($panelName !== '' ? $panelName : $section['name'], 255),
+                                    date('Y-m-d H:i:s'),
+                                    (int)$manual['id'],
+                                ]
                             );
                         }
                         continue;
@@ -347,13 +338,16 @@ class CatalogImportService
                     // Mapping upsert (auto-generated => always overwrite auto rows).
                     // The mapping's openemr_procedure_name keeps the CLEAN test
                     // name (no ` · {Lab}` suffix): reports/results must not show it.
+                    // openelis_panel_id carries the section grp code and
+                    // openelis_panel_name the panel display string when the
+                    // catalog reports one (informational in both cases).
                     $inserted = $this->upsertMapping(
                         $code,
                         $this->truncateName($testName),
                         $testId,
                         $this->truncateName($testName),
-                        $panelId,
-                        $this->truncateName($panelName, 255),
+                        $sectionCode,
+                        $this->truncateName($panelName !== '' ? $panelName : $section['name'], 255),
                         $loinc,
                         $snomed,
                         $providerId,
@@ -375,7 +369,6 @@ class CatalogImportService
                 $providerId,
                 $seenPanelCodes,
                 $seenTestCodes,
-                !empty($emptyMembersPanels),
                 $dryRun,
                 $summary
             );
@@ -398,7 +391,8 @@ class CatalogImportService
     // ---------------------------------------------------------------------
 
     /**
-     * Insert or update the grp row for a panel and return its procedure_type_id.
+     * Insert or update the grp row for a test SECTION and return its
+     * procedure_type_id.
      *
      * NOTE (do not mix up): the returned id is `procedure_type.procedure_type_id`
      * (the AUTO_INCREMENT primary key), which is what other rows reference in
@@ -439,9 +433,10 @@ class CatalogImportService
     }
 
     /**
-     * Insert or update an orderable test under its panel grp. A test that moved
-     * panels between syncs is re-hung under its NEW panel: the UPDATE always
-     * reassigns `parent`, so it can never be left orphaned while it exists.
+     * Insert or update an orderable test under its section grp. A test whose
+     * section changed between syncs is re-hung under its NEW section: the
+     * UPDATE always reassigns `parent`, so it can never be left orphaned while
+     * it exists.
      *
      * @return array ['created' => bool, 'reactivated' => bool]
      */
@@ -560,21 +555,19 @@ class CatalogImportService
      * logged by upsertGroup/upsertTest) are reported in the summary.
      *
      * SAFETY GUARDS (transient API failures must never wipe a live tree):
-     *  - Only runs when the import actually saw panels AND tests: an empty or
+     *  - Only runs when the import actually saw sections AND tests: an empty or
      *    failed catalog read deactivates nothing.
-     *  - When ANY panel returned an empty member list this run, the test pass is
-     *    skipped (a single flaky panel must not orphan-deactivate its tests);
-     *    the panel pass still applies because panels are a cheap single call.
      *  - Dry-run: reports exactly what WOULD be deactivated, zero writes.
      *
      * @param array $summary  Passed by reference; populated with
      *                        deactivated_panels / deactivated_tests [code => name].
+     *                        `deactivated_panels` holds section grps (and any
+     *                        residue of the old panel-based scheme).
      */
     private function reconcileAbsent(
         int $providerId,
         array $seenPanelCodes,
         array $seenTestCodes,
-        bool $emptyMembersFound,
         bool $dryRun,
         array &$summary
     ): void {
@@ -582,7 +575,7 @@ class CatalogImportService
             return;
         }
         // The seen-sets are already [procedure_code => true] (the importer
-        // stamps them per panel/test as it walks the catalog).
+        // stamps them per section/test as it walks the catalog).
         $seenPanels = $seenPanelCodes;
         $seenTests = $seenTestCodes;
 
@@ -599,9 +592,6 @@ class CatalogImportService
                 continue;
             }
             if ($isPanel ? isset($seenPanels[$code]) : isset($seenTests[$code])) {
-                continue;
-            }
-            if (!$isPanel && $emptyMembersFound) {
                 continue;
             }
 
@@ -691,6 +681,12 @@ class CatalogImportService
     /**
      * Insert or update an auto-generated mapping row.
      *
+     * @param string $sectionCode    Procedure_code of the section grp the test
+     *                               hangs from; stored in openelis_panel_id
+     *                               (informational, never compared).
+     * @param string $sectionDisplay Display label stored in openelis_panel_name:
+     *                               the test's panel string from the catalog when
+     *                               present, else the section name (informational).
      * @param string $snomed  SNOMED-CT specimen code resolved from the catalog
      *                        sample type via mod_openelis_specimen_map; ''
      *                        keeps the stored value on update (never wipes a
@@ -703,8 +699,8 @@ class CatalogImportService
         string $procedureName,
         string $testId,
         string $testName,
-        string $panelId,
-        string $panelName,
+        string $sectionCode,
+        string $sectionDisplay,
         string $loinc,
         string $snomed,
         int $providerId,
@@ -726,8 +722,8 @@ class CatalogImportService
                         $procedureName,
                         $testId,
                         $testName,
-                        $panelId,
-                        $panelName,
+                        $sectionCode,
+                        $sectionDisplay,
                         $loinc !== '' ? $loinc : null,
                         $snomed,
                         $snomed,
@@ -751,8 +747,8 @@ class CatalogImportService
                     $procedureName,
                     $testId,
                     $testName,
-                    $panelId,
-                    $panelName,
+                    $sectionCode,
+                    $sectionDisplay,
                     $loinc !== '' ? $loinc : null,
                     $snomed !== '' ? $snomed : null,
                     date('Y-m-d H:i:s'),
@@ -761,102 +757,6 @@ class CatalogImportService
             );
         }
         return true;
-    }
-
-    // ---------------------------------------------------------------------
-    // source data handling
-    // ---------------------------------------------------------------------
-
-    /**
-     * Key the active-tests list by test id and normalize each entry to
-     * ['name', 'loinc', 'sample_type', 'errorCount', 'findings'].
-     */
-    private function indexActiveTests(array $tests): array
-    {
-        $index = [];
-        foreach ($tests as $t) {
-            $testId = $this->pick($t, ['test_id', 'testId', 'id']);
-            if ($testId === null || $testId === '') {
-                continue;
-            }
-            $index[$testId] = [
-                'name' => $this->pick($t, ['test_name', 'testName', 'name', 'name_en', 'name_es'])
-                    ?? ('Test ' . $testId),
-                'loinc' => (string)($this->pickStr($t, ['loinc', 'loinc_code', 'loincCode']) ?? ''),
-                'sample_type' => (string)(
-                    $this->pickStr($t, ['sampleType', 'sample_type', 'typeOfSample', 'type_of_sample', 'sample', 'specimen'])
-                    ?? ''
-                ),
-                'errorCount' => (int)($this->pick($t, ['errorCount', 'error_count', 'errors']) ?? 0),
-                'findings' => $t['findings'] ?? [],
-            ];
-        }
-        return $index;
-    }
-
-    /**
-     * Classify a test based on errorCount + findings.
-     *
-     * @return array ['error' => bool, 'warning' => bool, 'messages' => string[]]
-     */
-    private function classify(array $test): array
-    {
-        $messages = [];
-        $hasError = $test['errorCount'] > 0;
-        $hasWarning = false;
-
-        $findings = $test['findings'] ?? [];
-        foreach ((array)$findings as $finding) {
-            [$message, $severity] = $this->parseFinding($finding);
-            if ($message !== '') {
-                $messages[] = $message;
-            }
-            if ($severity === 'error') {
-                $hasError = true;
-            } elseif ($severity === 'warning') {
-                $hasWarning = true;
-            }
-        }
-
-        return [
-            'error' => $hasError,
-            'warning' => $hasWarning && !$hasError,
-            'messages' => $messages,
-        ];
-    }
-
-    /**
-     * Normalize a single finding entry to [message, severity].
-     * Accepts a plain string ("SAMPLE_TYPE_LINKS", "DUPLICATE_LOINC_DIFF_SPECIMEN")
-     * or an array with message/description/type + severity fields.
-     */
-    private function parseFinding($finding): array
-    {
-        if (is_string($finding)) {
-            $finding = trim($finding);
-            if ($finding === '' || stripos($finding, 'warning') !== false) {
-                return [$finding, 'warning'];
-            }
-            if (stripos($finding, 'error') !== false || stripos($finding, 'orphan') !== false) {
-                return [$finding, 'error'];
-            }
-            // Unknown plain string: treat as a non-blocking warning.
-            return [$finding, 'warning'];
-        }
-
-        if (is_array($finding)) {
-            $message = (string)($this->pickStr($finding, ['message', 'description', 'type', 'typeCode', 'code']) ?? '');
-            $severityRaw = strtolower(trim((string)($this->pickStr($finding, ['severity', 'severityType', 'type']) ?? '')));
-            if (in_array($severityRaw, ['error', 'errorseverity', 'severity_error'], true) || str_contains($severityRaw, 'error')) {
-                return [$message, 'error'];
-            }
-            if (str_contains($severityRaw, 'warning')) {
-                return [$message, 'warning'];
-            }
-            return [$message, 'warning'];
-        }
-
-        return ['', 'warning'];
     }
 
     // ---------------------------------------------------------------------
@@ -873,12 +773,65 @@ class CatalogImportService
     }
 
     /**
-     * Deterministic, globally-unique group code for a panel.
-     * OEP2-5 = provider ppid 2, OpenELIS panel 5.
+     * Deterministic, globally-unique group code for a test section.
+     * OEP2-SEC-1a2b3c4d = provider ppid 2, section whose lowercase name hashes
+     * to 1a2b3c4d. The hash (not the raw name) keeps the code short and ASCII;
+     * it is stable across runs, so re-importing is idempotent. The OEP{p}-%
+     * prefix keeps the row inside the reconciliation scan.
      */
-    private function panelCode(int $providerId, string $panelId): string
+    private function sectionCode(int $providerId, string $sectionName): string
     {
-        return 'OEP' . $providerId . '-' . $panelId;
+        return 'OEP' . $providerId . '-SEC-' . substr(md5($this->sectionKey($sectionName)), 0, 8);
+    }
+
+    /**
+     * Normalized key for a section name (used to bucket tests and to seed the
+     * group code hash). Empty/whitespace collapses to 'general'.
+     */
+    private function sectionKey(string $sectionName): string
+    {
+        $name = trim($sectionName);
+        return $name === '' ? 'general' : strtolower($name);
+    }
+
+    /**
+     * Display name of a test's section, with a stable fallback for tests whose
+     * catalog entry carries no section (empty testUnit).
+     */
+    private function sectionName(string $sectionName): string
+    {
+        $name = trim($sectionName);
+        return $name === '' || strcasecmp($name, 'n/a') === 0 ? 'General' : $name;
+    }
+
+    /**
+     * The catalog reports the panels a test belongs to as a comma-separated
+     * display string ("None" when it belongs to none). Normalize "None"/empty
+     * to '', keeping the informative value otherwise.
+     */
+    private function panelString(string $panel): string
+    {
+        $panel = trim($panel);
+        if ($panel === '' || strcasecmp($panel, 'none') === 0) {
+            return '';
+        }
+        return $panel;
+    }
+
+    /**
+     * Interpret the catalog's active flag. The classic endpoint sends the
+     * strings "Active" / "Not active"; booleans and 0/1 are accepted too.
+     */
+    private function isActiveFlag($flag): bool
+    {
+        if (is_bool($flag)) {
+            return $flag;
+        }
+        if (is_numeric($flag)) {
+            return (int)$flag === 1;
+        }
+        $s = strtolower(trim((string)$flag));
+        return in_array($s, ['active', '1', 'true', 'y', 'yes'], true);
     }
 
     /**

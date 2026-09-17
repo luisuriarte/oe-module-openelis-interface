@@ -1,8 +1,8 @@
 <?php
 
 /**
- * Admin page for bulk-importing the OpenELIS catalog (panels + ordered tests)
- * into OpenEMR's procedure catalog, per lab provider.
+ * Admin page for bulk-importing the OpenELIS catalog (active tests, grouped
+ * by OpenELIS test section) into OpenEMR's procedure catalog, per lab provider.
  *
  * Reads the OpenELIS REST test-catalog API using the provider's catalog ADMIN
  * credentials (mod_openelis_catalog_login / password), configured in the native
@@ -174,7 +174,7 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
     <div class="card-header">
         <h4><?php echo xlt("Import Catalog"); ?></h4>
         <div class="cfg-hint">
-            <?php echo xlt("Imports the OpenELIS test catalog (panels + ordered tests) into the OpenEMR lab procedure catalog, respecting each provider's own catalog. Tests with catalog errors are excluded; warnings are reported. Manual code mappings are never overwritten."); ?>
+            <?php echo xlt("Imports the OpenELIS test catalog (active tests, grouped by OpenELIS test section) into the OpenEMR lab procedure catalog, respecting each provider's own catalog. Manual code mappings are never overwritten."); ?>
         </div>
     </div>
     <div class="card-body">
@@ -316,13 +316,10 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
 
         const row = document.createElement('div');
         row.className = 'row g-2 mb-3';
-        const withIssues = s.catalog_totalWithIssues != null
-            ? ' | errores: ' + s.catalog_totalErrors + ' advertencias: ' + s.catalog_totalWarnings
-            : '';
         const cards = [
-            ['Panels', s.panels],
+            ['Secciones (grupos)', s.panels],
             ['Tests importados', s.tests_imported],
-            ['Catálogo activo', s.catalog_total != null ? s.catalog_total + (withIssues || '') : '—'],
+            ['Tests activos del catálogo', s.catalog_total != null ? s.catalog_total : '—'],
             ['Grupos creados', s.groups_created],
             ['Grupos actualizados', s.groups_updated],
             ['Tests creados', s.tests_created],
@@ -334,9 +331,9 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
             ['Inactivos/no encontrados', Object.keys(s.inactive_missing || {}).length],
             ['Conflictos con mapeos manuales', Object.keys(s.conflicts || {}).length],
             ['Muestras sin SNOMED', Object.keys(s.specimen_unmapped || {}).length],
-            ['Paneles desactivados', Object.keys(s.deactivated_panels || {}).length],
+            ['Secciones desactivadas', Object.keys(s.deactivated_panels || {}).length],
             ['Tests desactivados', Object.keys(s.deactivated_tests || {}).length],
-            ['Paneles reactivados', Object.keys(s.reactivated_panels || {}).length],
+            ['Secciones reactivadas', Object.keys(s.reactivated_panels || {}).length],
             ['Tests reactivados', Object.keys(s.reactivated_tests || {}).length],
         ];
         for (const [label, value] of cards) {
@@ -373,9 +370,9 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
                 ])),
                 'Todos los tipos de muestra tienen código SNOMED.',
             ],
-            ['Paneles desactivados (ausentes del catálogo)', s.deactivated_panels || {}, 'Sin paneles desactivados.'],
+            ['Secciones desactivadas (ausentes del catálogo)', s.deactivated_panels || {}, 'Sin secciones desactivadas.'],
             ['Tests desactivados (ausentes del catálogo)', s.deactivated_tests || {}, 'Sin tests desactivados.'],
-            ['Paneles reactivados (volvieron al catálogo)', s.reactivated_panels || {}, 'Sin paneles reactivados.'],
+            ['Secciones reactivadas (volvieron al catálogo)', s.reactivated_panels || {}, 'Sin secciones reactivadas.'],
             ['Tests reactivados (volvieron al catálogo)', s.reactivated_tests || {}, 'Sin tests reactivados.'],
         ];
         for (const [titulo, data, vacio] of dets) {
