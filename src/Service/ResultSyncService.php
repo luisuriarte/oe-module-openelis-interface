@@ -2,6 +2,7 @@
 
 namespace OpenEMR\Modules\OpenElis\Service;
 
+use OpenEMR\Common\Uuid\UuidRegistry;
 use OpenEMR\Modules\OpenElis\Client\OpenElisApiClient;
 use OpenEMR\Modules\OpenElis\CodeMappingService;
 use OpenEMR\Modules\OpenElis\Mappers\ResultMapper;
@@ -288,7 +289,7 @@ class ResultSyncService
 
     private function storeReport(array $order, int $seq, array $reportRow): int
     {
-        return (int)sqlInsert(
+        $reportId = (int)sqlInsert(
             "INSERT INTO procedure_report
                 (procedure_order_id, procedure_order_seq, date_collected, date_report,
                  source, specimen_num, report_status, report_notes)
@@ -305,11 +306,13 @@ class ResultSyncService
                 $reportRow['report_notes'],
             ]
         );
+        UuidRegistry::createMissingUuidForRow('procedure_report', 'procedure_report_id', $reportId);
+        return $reportId;
     }
 
     private function storeResult(int $reportId, array $row): void
     {
-        sqlInsert(
+        $resultId = (int)sqlInsert(
             "INSERT INTO procedure_result
                 (`procedure_report_id`, `result_data_type`, `result_code`, `result_text`,
                  `date`, `facility`, `units`, `result`, `range`, `abnormal`, `comments`, `result_status`)
@@ -329,5 +332,6 @@ class ResultSyncService
                 $row['result_status'],
             ]
         );
+        UuidRegistry::createMissingUuidForRow('procedure_result', 'procedure_result_id', $resultId);
     }
 }
