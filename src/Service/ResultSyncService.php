@@ -290,12 +290,13 @@ class ResultSyncService
     {
         return (int)sqlInsert(
             "INSERT INTO procedure_report
-                (procedure_order_id, procedure_order_seq, date_report, source,
-                 specimen_num, report_status, report_notes)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (procedure_order_id, procedure_order_seq, date_collected, date_report,
+                 source, specimen_num, report_status, report_notes)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 $order['procedure_order_id'],
                 $seq,
+                $reportRow['date_collected'] ?? $reportRow['date_report'],
                 $reportRow['date_report'],
                 // source = procedure_providers.ppid of the delivering lab (not a users.id)
                 0,

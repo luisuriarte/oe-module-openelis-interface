@@ -62,7 +62,7 @@ class ResultMapper
     public static function toOpenEmr(array $report, array $observations): array
     {
         return [
-            'report' => self::mapReport($report),
+            'report' => self::mapReport($report, $observations),
             'results' => array_values(array_filter(array_map(
                 fn($obs) => self::mapObservation($obs),
                 $observations
@@ -70,7 +70,7 @@ class ResultMapper
         ];
     }
 
-    private static function mapReport(array $report): array
+    private static function mapReport(array $report, array $observations = []): array
     {
         $status = strtolower((string)($report['status'] ?? ''));
         $reportStatus = self::REPORT_STATUS_MAP[$status] ?? 'received';
@@ -85,6 +85,22 @@ class ResultMapper
         if ($dateReport === null && !empty($report['effectivePeriod']['start'])) {
             $dateReport = self::fhirToOpenEmrDate($report['effectivePeriod']['start']);
         }
+        // OpenELIS DiagnosticReports carry neither issued nor
+        // effectiveDateTime — only meta.lastUpdated. Fall back to it.
+        if ($dateReport === null && !empty($report['meta']['lastUpdated'])) {
+            $dateReport = self::fhirToOpenEmrDate($report['meta']['lastUpdated']);
+        }
+        // Last resort: the date of the first Observation in the report.
+        if ($dateReport === null) {
+            foreach ($observations as $obs) {
+                foreach (['effectiveDateTime', 'issued'] as $key) {
+                    if (!empty($obs[$key])) {
+                        $dateReport = self::fhirToOpenEmrDate($obs[$key]);
+                        break 2;
+                    }
+                }
+            }
+        }
 
         $specimen = '';
         if (isset($report['specimen'][0]['reference'])) {
@@ -98,6 +114,9 @@ class ResultMapper
 
         return [
             'date_report' => $dateReport,
+            // Keep date_collected in sync: OpenEMR's lab-results view shows the
+            // collection date too, and OpenELIS does not distinguish them.
+            'date_collected' => $dateReport,
             'specimen_num' => (string)$specimen,
             'report_status' => $reportStatus,
             'report_notes' => $notes,
