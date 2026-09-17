@@ -499,6 +499,11 @@ Results are pulled **on demand** (buttons) — no polling yet.
 
 ### Observations/edge cases
 
+- Stored rows receive native OpenEMR UUIDs: each inserted `procedure_report` /
+  `procedure_result` row gets its `uuid` (binary(16)) populated right after the
+  insert via `UuidRegistry::createMissingUuidForRow()` — the same registry the
+  core uses, so UUID-based lookups (API/FHIR, `ProcedureService`) work as with
+  native results.
 - Report subject must equal the order's verified `Patient/<ref>`; anything else
   is skipped with an `error_log` entry.
 - `DiagnosticReport.status` final/amended/corrected → `report_status = 'complete'`;

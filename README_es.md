@@ -506,6 +506,11 @@ Los resultados se traen **bajo demanda** (botones) — aún no hay sondeo autom�
 
 ### Observaciones / casos límite
 
+- Las filas guardadas reciben UUID nativo de OpenEMR: cada fila insertada en
+  `procedure_report` / `procedure_result` recibe su `uuid` (binary(16)) justo
+  después del insert vía `UuidRegistry::createMissingUuidForRow()` — el mismo
+  registro que usa el core, así las búsquedas por UUID (API/FHIR,
+  `ProcedureService`) funcionan igual que con resultados nativos.
 - El subject del informe debe coincidir con el `Patient/<ref>` verificado de la
   orden; lo que no coincida se omite con una entrada `error_log`.
 - `DiagnosticReport.status` final/amended/corrected → `report_status = 'complete'`;

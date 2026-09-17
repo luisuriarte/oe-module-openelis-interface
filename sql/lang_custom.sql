@@ -184,7 +184,21 @@ INSERT IGNORE INTO `lang_custom` (`lang_description`, `lang_code`, `constant_nam
 
 -- public/admin_mapping.php (structural picker)
 ('Spanish (Latin American)', 'el', 'OpenELIS Test',                                             'Test de OpenELIS'),
-('Spanish (Latin American)', 'el', 'Search name or id...',                                      'Buscar por nombre o id...');
+('Spanish (Latin American)', 'el', 'Search name or id...',                                      'Buscar por nombre o id...'),
+-- public/admin_mapping.php (empty catalog notice)
+('Spanish (Latin American)', 'el', 'The OpenELIS test catalog is empty. Import it first via',   'El catálogo de pruebas de OpenELIS está vacío. Impórtelo primero vía'),
+-- public/pending_orders.php (table header)
+('Spanish (Latin American)', 'el', 'Priority',                                                  'Prioridad'),
+-- src/Service/ResultSyncService.php (additional messages)
+('Spanish (Latin American)', 'el', 'Patient has no pubpid, cannot correlate results with OpenELIS', 'El paciente no tiene pubpid, no se puede correlacionar resultados con OpenELIS'),
+('Spanish (Latin American)', 'el', 'no LOINC',                                                  'sin LOINC'),
+('Spanish (Latin American)', 'el', 'Order',                                                     'Orden'),
+('Spanish (Latin American)', 'el', 'tests',                                                     'pruebas'),
+-- src/Service/OrderSyncService.php (additional messages)
+('Spanish (Latin American)', 'el', 'Transmitted',                                               'Transmitido'),
+('Spanish (Latin American)', 'el', 'Patient record not found in OpenEMR: pid=',                 'No se encontró el registro del paciente en OpenEMR: pid='),
+('Spanish (Latin American)', 'el', 'None of the tests could be sent to OpenELIS. Please check code mappings and OpenELIS connection.', 'Ninguna de las pruebas pudo enviarse a OpenELIS. Verifique el mapeo de códigos y la conexión con OpenELIS.'),
+('Spanish (Latin American)', 'el', 'ServiceRequests were created in OpenELIS but the Task could not be published. OpenELIS requires the Task to import the order into Electronic Orders.', 'Los ServiceRequests se crearon en OpenELIS pero la Task no pudo publicarse. OpenELIS requiere la Task para importar la orden a Electronic Orders.');
 
 -- ============================================================================
 -- SYNC: Populate lang_languages, lang_constants and lang_definitions
