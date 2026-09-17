@@ -420,7 +420,8 @@ foreach ($procedureCodes as $code) {
      `mod_openelis_code_mapping`) en el store FHIR co-residente de OpenELIS;
    - **publica un `Task`** (`status=requested`, `intent=order`,
      `basedOn` → los ServiceRequest creados, `for` → el Patient,
-     `owner` → el Practitioner que ordena). Este es el recurso que OpenELIS
+     `owner` → el Practitioner que ordena, o la ref configurada vía la clave
+     `openelis_task_owner`). Este es el recurso que OpenELIS
      sondea para mostrar la orden en la cola de **Electronic Orders**: sin él,
      el ServiceRequest queda dormido y nunca se importa como eOrder.
    - guarda las referencias en la orden: `mod_openelis_order_id` (primer ServiceRequest),
@@ -451,6 +452,22 @@ org.openelisglobal.fhir.subscriber.resources=Task,Patient,ServiceRequest,Diagnos
 
 Después de guardar, reiniciar el webapp de OpenELIS y habilitar
 **External orders** en Administración → External Orders.
+
+> **Override del owner del Task.** OpenELIS sondea los Tasks cuyo `owner` coincide
+> con la única ref de practitioner de arriba (`remote.source.identifier`). Por
+> defecto el módulo publica el Task bajo el practitioner del proveedor que ordena —
+> que solo coincide con ese filtro si el despliegue creó/usa exactamente ese
+> practitioner. Para desacoplar el owner del Task del proveedor, cargá la clave
+> `openelis_task_owner` (tabla `mod_openelis_config`) con la misma ref usada del
+> lado de OpenELIS, p. ej.:
+>
+> ```sql
+> INSERT INTO mod_openelis_config (cfg_name, cfg_value)
+> VALUES ('openelis_task_owner', 'Practitioner/2181365d-7e4d-5d47-a18d-3da3fe37e8af');
+> ```
+>
+> El valor puede ser una ref completa `Practitioner/<uuid>` o un uuid pelado (el
+> módulo le antepone el prefijo `Practitioner/`).
 
 ---
 

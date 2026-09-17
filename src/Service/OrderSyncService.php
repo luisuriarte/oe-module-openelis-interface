@@ -204,6 +204,31 @@ class OrderSyncService
     }
 
     /**
+     * Resolve the Practitioner ref used as the Task.owner.
+     *
+     * OpenELIS polls inbound orders by filtering Task resources on the single
+     * Practitioner ref configured as org.openelisglobal.remote.source.identifier.
+     * The per-provider practitioner UUID (syncPractitionerToOpenElis) must match
+     * that value, so when the deployment uses a dedicated/synthetic practitioner
+     * for the poll filter, the module needs to publish the Task under that
+     * practitioner instead of the ordering provider's.
+     *
+     * The optional mod_openelis_config key `openelis_task_owner` overrides the
+     * Task owner ref. Suggested value: the exact Practitioner ref configured as
+     * `remote.source.identifier` on the OpenELIS side
+     * (e.g. "Practitioner/2181365d-7e4d-5d47-a18d-3da3fe37e8af").
+     *
+     * @param string $practitionerRef  Practitioner ref from syncPractitionerToOpenElis()
+     * @return string                  Practicioner ref to publish as Task.owner
+     */
+    private function resolveTaskOwnerRef(string $practitionerRef): string
+    {
+        $row = sqlQuery("SELECT cfg_value FROM mod_openelis_config WHERE cfg_name = 'openelis_task_owner'");
+        $configured = trim((string)($row['cfg_value'] ?? ''));
+        return $configured !== '' ? $configured : $practitionerRef;
+    }
+
+    /**
      * Send a procedure_order to OpenELIS as a FHIR Transaction Bundle.
      *
      * Flow:
@@ -414,7 +439,7 @@ class OrderSyncService
                     $task = OrderMapper::toFhirTask(
                         $serviceRequestRefs,
                         $patientRef,
-                        $practitionerRef,
+                        $this->resolveTaskOwnerRef($practitionerRef),
                         $order['date_ordered'] ?? null
                     );
                     $createdTask = $client->createResource($task);
