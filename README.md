@@ -256,7 +256,10 @@ OpenELIS REST API in **one call** — `GET /OpenELIS-Global/rest/TestCatalog`
 (requires an **OpenELIS ADMIN** user, configured per provider as
 `procedure_providers.mod_openelis_catalog_login` / `mod_openelis_catalog_password`
 — never the operational Analyser Import user; edited on the native Procedure
-Providers form, see `patches/procedure_provider_edit.php`) and:
+Providers form, see `patches/procedure_provider_edit.php`). Only providers that
+carry the catalog ADMIN login (the OpenELIS-lab marker, same as `pending_orders`
+/ `probe_results_api`) are listed on the import page — PACS or other non-OpenELIS
+providers never appear. The importer:
 
 1. Reads the **whole catalog** (a single non-paginated document; every test,
    active and inactive) and keeps only the **active** tests (`active` =
@@ -603,6 +606,12 @@ OpenELIS user carrying the **ADMIN** role:
   `/OpenELIS-Global/rest/test-catalog/panels*` path answers the Tomcat **404**
   you see when a client assumes pa panel endpoint. Panel membership only appears
   as a display string per test, which is why the import groups by section.
+- The provider's `remote_host` normally points at the **FHIR store**
+  (external-fhir-api ports 8080/8081/8444, e.g. `http://127.0.0.1:8081/fhir/`),
+  which answers **only FHIR** paths. The REST webapp lives on its own origin
+  (`https://127.0.0.1:8443`, Host `elis.origen.ar`), so `CatalogApiClient`
+  redirects external-FHIR ports to the webapp origin — the same rule
+  `PatientManagementClient` already used.
 
 - The local mirror table `mod_openelis_test_catalog` is kept fresh by the
   catalog import (`public/catalog_import.php` / `CatalogImportService`), which

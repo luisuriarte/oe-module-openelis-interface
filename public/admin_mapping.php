@@ -430,7 +430,7 @@ $webRoot = $GLOBALS['webroot'] ?? '';
                     </option>
                 <?php endforeach; ?>
                 <option value="0" <?php echo $currentProvider === 0 ? 'selected' : ''; ?>>
-                    <?php echo xlt("— Legacy (sin proveedor) —"); ?>
+                    <?php echo xlt("— Legacy (no provider) —"); ?>
                 </option>
             </select>
         </div>

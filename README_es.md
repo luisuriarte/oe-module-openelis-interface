@@ -257,7 +257,10 @@ Lee la API REST de OpenELIS en **una sola llamada** — `GET /OpenELIS-Global/re
 (requiere un usuario **ADMIN** de OpenELIS, configurado por proveedor en
 `procedure_providers.mod_openelis_catalog_login` / `mod_openelis_catalog_password`
 — nunca el usuario operativo Analyser Import; se editan en el formulario nativo
-de proveedores, ver `patches/procedure_provider_edit.php`) y:
+de proveedores, ver `patches/procedure_provider_edit.php`). Solo los proveedores
+que llevan el login de catálogo ADMIN (el marcador de laboratorio OpenELIS,
+igual que `pending_orders` / `probe_results_api`) aparecen en la página de
+import — PACS u otros proveedores ajenos jamás se listan. El importador:
 
 1. Lee el **catálogo completo** (un único documento sin paginación; todas las
    pruebas, activas e inactivas) y conserva solo las **activas** (`active` =
@@ -611,6 +614,12 @@ usan Basic Auth con un usuario de OpenELIS con rol **ADMIN**:
   se ve cuando un cliente asume un endpoint de paneles. La pertenencia a panel solo
   aparece como string de display por prueba, razón por la que el import agrupa por
   sección.
+- El `remote_host` del proveedor normalmente apunta al **FHIR store**
+  (puertos external-fhir-api 8080/8081/8444, ej. `http://127.0.0.1:8081/fhir/`),
+  que responde **solo** rutas FHIR. El webapp REST vive en su propio origin
+  (`https://127.0.0.1:8443`, Host `elis.origen.ar`), así que `CatalogApiClient`
+  redirige los puertos external-FHIR al origin del webapp — la misma regla que ya
+  usaba `PatientManagementClient`.
 
 - La tabla espejo local `mod_openelis_test_catalog` se mantiene fresca con la
   importación de catálogo (`public/catalog_import.php` / `CatalogImportService`),

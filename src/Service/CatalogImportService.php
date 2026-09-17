@@ -182,8 +182,7 @@ class CatalogImportService
                 continue;
             }
             $activeCount++;
-            $testName = $this->pick($raw, ['test_name', 'testName', 'name', 'name_en', 'name_es', 'localization'])
-                ?? ('Test ' . $testId);
+            $testName = $this->testName($raw, $testId);
             $sectionName = $this->sectionName((string)($raw['testUnit'] ?? ''));
             $key = $this->sectionKey($sectionName);
             $test = [
@@ -869,7 +868,7 @@ class CatalogImportService
     private function pick(array $row, array $keys): ?string
     {
         foreach ($keys as $key) {
-            if (array_key_exists($key, $row) && $row[$key] !== null && $row[$key] !== '') {
+            if (array_key_exists($key, $row) && is_scalar($row[$key]) && (string)$row[$key] !== '') {
                 return (string)$row[$key];
             }
         }
@@ -882,11 +881,61 @@ class CatalogImportService
     private function pickStr(array $row, array $keys): ?string
     {
         foreach ($keys as $key) {
-            if (array_key_exists($key, $row) && $row[$key] !== null) {
+            if (array_key_exists($key, $row) && is_scalar($row[$key])) {
                 return (string)$row[$key];
             }
         }
         return null;
+    }
+
+    /**
+     * Extract a usable display name from a catalog entry.
+     *
+     * The classic endpoint returns the name under `localization`, which is an
+     * OBJECT (never a plain string): either a small DTO with spanish/english
+     * fields or a localizedNames language -> string map. We prefer a Spanish
+     * label, fall back to English, then to any language the map provides.
+     *
+     * @param array  $raw   Catalog entry
+     * @param string $testId Fallback suffix for "Test {id}" placeholders
+     * @return string
+     */
+    private function testName(array $raw, string $testId): string
+    {
+        foreach (['test_name', 'testName', 'name', 'name_en', 'name_es'] as $key) {
+            $v = $raw[$key] ?? null;
+            if (is_scalar($v) && trim((string)$v) !== '') {
+                return (string)$v;
+            }
+        }
+
+        $loc = $raw['localization'] ?? null;
+        if (is_array($loc)) {
+            foreach (['localizedNames', 'names'] as $mapKey) {
+                $map = $loc[$mapKey] ?? null;
+                if (is_array($map)) {
+                    foreach (['es', 'es_AR', 'es_419', 'spanish', 'en', 'english'] as $lang) {
+                        $v = $map[$lang] ?? null;
+                        if (is_scalar($v) && trim((string)$v) !== '') {
+                            return (string)$v;
+                        }
+                    }
+                    foreach ($map as $v) {
+                        if (is_scalar($v) && trim((string)$v) !== '') {
+                            return (string)$v;
+                        }
+                    }
+                }
+            }
+            foreach (['spanish', 'es', 'es_AR', 'english', 'en'] as $field) {
+                $v = $loc[$field] ?? null;
+                if (is_scalar($v) && trim((string)$v) !== '') {
+                    return (string)$v;
+                }
+            }
+        }
+
+        return 'Test ' . $testId;
     }
 
     /**
@@ -935,7 +984,7 @@ class CatalogImportService
         }
         if (empty($provider['mod_openelis_catalog_login'])) {
             throw new \RuntimeException(
-                "No catalog credentials configured for {$provider['name']}. "
+                "No catalog credentials configured for {$provider['name']} (provider #{$provider['ppid']}). "
                 . "Set the OpenELIS ADMIN catalog user on the Procedure Providers edit form before importing."
             );
         }

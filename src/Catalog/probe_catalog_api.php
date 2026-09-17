@@ -53,7 +53,13 @@ function probeOrigin(string $remoteHost): string
 {
     if (filter_var($remoteHost, FILTER_VALIDATE_URL)) {
         $p = parse_url($remoteHost);
-        return ($p['scheme'] ?? 'https') . '://' . ($p['host'] ?? '') . (isset($p['port']) ? ':' . $p['port'] : '');
+        $port = isset($p['port']) ? (int)$p['port'] : null;
+        // If the port belongs to external-fhir-api (8080, 8081, 8444), the
+        // REST webapp is on the default origin (https://127.0.0.1:8443).
+        if (in_array($port, [8080, 8081, 8444], true)) {
+            return 'https://127.0.0.1:8443';
+        }
+        return ($p['scheme'] ?? 'https') . '://' . ($p['host'] ?? '') . ($port ? ':' . $port : '');
     }
     return 'https://127.0.0.1:8443';
 }
@@ -157,15 +163,28 @@ function findCollection(array $doc, array $candidateKeys): array
 }
 
 /**
+ * Compact "k1=type, k2=type" listing of a map's first-level keys.
+ */
+function mapTypes(array $a): string
+{
+    $parts = [];
+    foreach ($a as $k => $v) {
+        $parts[] = $k . '=' . (is_array($v) ? 'array[' . count($v) . ']' : typeOf($v));
+    }
+    return implode(', ', $parts) . '  (n=' . count($a) . ')';
+}
+
+/**
  * Compare an item against the candidate-key lists the service parses with
- * (CatalogImportService::pick / ingest code). Verdict: which code key / name
- * key won, and whether the active flag is present in a recognizable shape.
+ * (CatalogImportService::pick / pickStr / testName). Verdict: which code key /
+ * name key won, whether the active flag is present in a recognizable shape,
+ * and the real shape of the `localization` object.
  */
 function dumpItemKeys(array $item, string $context): void
 {
     $codeKeys = ['test_id', 'testId', 'id'];
     $nameKeys = ['test_name', 'testName', 'name', 'name_en', 'name_es', 'localization'];
-    $support  = ['loinc', 'loinc_code', 'loincCode', 'sampleType', 'sample_type', 'testUnit', 'panel', 'uom', 'active', 'testSortOrder'];
+    $support  = ['loinc', 'sampleType', 'testUnit', 'panel', 'uom', 'active', 'testSortOrder'];
 
     foreach ([$codeKeys, $nameKeys] as $keys) {
         $label = $keys === $codeKeys ? 'code' : 'name';
@@ -194,6 +213,16 @@ function dumpItemKeys(array $item, string $context): void
     if ($active !== null && !is_bool($active) && !is_numeric($active)
         && !in_array(strtolower(trim((string)$active)), ['active', 'not active'], true)) {
         disc("$context: `active` has an unrecognized shape (" . typeOf($active) . ')');
+    }
+
+    $loc = $item['localization'] ?? null;
+    if (is_array($loc)) {
+        line("$context: localization shape -> " . mapTypes($loc));
+        foreach (['localizedNames', 'names'] as $m) {
+            if (isset($loc[$m]) && is_array($loc[$m])) {
+                line("$context: localization.$m        -> " . mapTypes($loc[$m]));
+            }
+        }
     }
 }
 
@@ -247,7 +276,10 @@ $active = array_values(array_filter((array)$catalog['items'], static function ($
 line('  active tests: ' . count($active) . ' of ' . count($catalog['items']));
 
 $rawIds = [];
-foreach ($active as $t) {
+foreach ((array)$catalog['items'] as $t) {
+    if (!is_array($t)) {
+        continue;
+    }
     $id = $t['test_id'] ?? $t['testId'] ?? $t['id'] ?? null;
     if ($id !== null) {
         $rawIds[(string)$id] = true;

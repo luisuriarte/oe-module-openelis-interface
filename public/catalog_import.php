@@ -128,12 +128,18 @@ if ($isAjax) {
 // ── Page data ───────────────────────────────────────────────────────────
 // Catalog credentials (mod_openelis_catalog_login/password) are managed on the
 // native Procedure Providers edit form (see patches/procedure_provider_edit.php).
+// A provider is an "OpenELIS lab" (and importable here) only when it has the
+// catalog ADMIN login set — the same marker pending_orders / probe_results_api
+// use, so PACS or other non-lab providers never appear in this page.
 $providers = [];
 $rsProviders = sqlStatement(
     "SELECT pp.ppid, pp.name, pp.protocol, pp.remote_host, pp.mod_openelis_catalog_login,
             (SELECT MAX(m.imported_at) FROM mod_openelis_code_mapping m
               WHERE m.provider_id = pp.ppid AND m.import_source = 'catalog_import') AS last_import
-     FROM procedure_providers pp WHERE pp.active = 1 ORDER BY pp.name"
+     FROM procedure_providers pp
+     WHERE pp.active = 1
+       AND pp.mod_openelis_catalog_login IS NOT NULL AND pp.mod_openelis_catalog_login != ''
+     ORDER BY pp.name"
 );
 while ($row = sqlFetchArray($rsProviders)) {
     // A provider is "catalog-ready" only when it can call its own OpenELIS
@@ -192,7 +198,7 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
                                 <?php if ($p['catalog_ready']): ?>
                                     <span class="badge text-bg-success ms-1"><?php echo xlt("Catalog ready"); ?></span>
                                 <?php else: ?>
-                                    <span class="badge text-bg-secondary ms-1"><?php echo xlt("Manual / no OpenELIS"); ?></span>
+                                    <span class="badge text-bg-secondary ms-1"><?php echo xlt("Incomplete (WS protocol / host)"); ?></span>
                                 <?php endif; ?>
                                 <div class="cfg-hint">
                                     <?php echo xlt("Last import"); ?>:
@@ -244,7 +250,7 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
 
         <?php if (empty($providers)): ?>
             <div class="alert alert-warning">
-                <?php echo xlt("No active lab providers found. Configure one in the lab providers section first."); ?>
+                <?php echo xlt("No OpenELIS lab providers found. On the native Procedure Providers edit form, open your lab provider (the one named after your OpenELIS installation, e.g. OpenELIS) and set its OpenELIS Catalog Login / Password. A provider only appears here once those catalog credentials are saved."); ?>
             </div>
         <?php endif; ?>
 
@@ -260,24 +266,76 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
 </div>
 
 <input type="hidden" id="csrf_token" value="<?php echo attr($csrfToken); ?>">
+<?php
+// UI strings: English (US) sources via xl() so the hospital language applies in
+// the browser too. Placeholder tokens ({code}, {provider}, {n}, {name}) are
+// substituted on the client, never inside the stored constant.
+$tr = [
+    'manualMapSublabel'      => xl('Manual mapping: {code} — auto import skipped (manual mapping prevails).'),
+    'dryRunAlert'            => xl('DRY RUN — nothing was written to the database. Review the summary, then confirm the import.'),
+    'importDone'             => xl('Import completed for {provider}.'),
+    'sectionsGroups'         => xl('Sections (groups)'),
+    'testsImported'          => xl('Tests imported'),
+    'activeInCatalog'        => xl('Active tests in catalog'),
+    'groupsCreated'          => xl('Groups created'),
+    'groupsUpdated'          => xl('Groups updated'),
+    'testsCreated'           => xl('Tests created'),
+    'testsUpdated'           => xl('Tests updated'),
+    'mappingsCreated'        => xl('Mappings created'),
+    'mappingsUpdated'        => xl('Mappings updated'),
+    'excludedError'          => xl('Excluded (error)'),
+    'withWarnings'           => xl('With warnings'),
+    'inactiveNotFound'       => xl('Inactive / not found'),
+    'conflictsManual'        => xl('Conflicts with manual mappings'),
+    'samplesNoSnomed'        => xl('Sample types without SNOMED'),
+    'sectionsDeactivated'    => xl('Sections deactivated'),
+    'testsDeactivated'       => xl('Tests deactivated'),
+    'sectionsReactivated'    => xl('Sections reactivated'),
+    'testsReactivated'       => xl('Tests reactivated'),
+    'excludedErrorTitle'     => xl('Excluded by error'),
+    'withWarningsTitle'      => xl('With catalog warnings'),
+    'samplesNoSnomedTitle'   => xl('Sample types without SNOMED code'),
+    'sectionsDeactivatedTitle' => xl('Sections deactivated (absent from catalog)'),
+    'testsDeactivatedTitle'    => xl('Tests deactivated (absent from catalog)'),
+    'sectionsReactivatedTitle' => xl('Sections reactivated (back in catalog)'),
+    'testsReactivatedTitle'    => xl('Tests reactivated (back in catalog)'),
+    'noExcluded'             => xl('No tests excluded by error.'),
+    'noWarnings'             => xl('No tests with warnings.'),
+    'noInactive'             => xl('No inactive tests.'),
+    'noConflicts'            => xl('No conflicts with manual mappings.'),
+    'allSnomed'              => xl('All sample types have a SNOMED code.'),
+    'noSectionsDeactivated'  => xl('No sections deactivated.'),
+    'noTestsDeactivated'     => xl('No tests deactivated.'),
+    'noSectionsReactivated'  => xl('No sections reactivated.'),
+    'noTestsReactivated'     => xl('No tests reactivated.'),
+    'countTests'             => xl('{n} test'),
+    'countTestsPlural'       => xl('{n} tests'),
+    'exampleSnomed'          => xl('Example: {name}. Fill in the SNOMED code in mod_openelis_specimen_map and re-import.'),
+    'errPrefix'              => xl('Error:'),
+    'selectProvider'         => xl('Select a lab provider.'),
+    'waiting'                => xl('Waiting...'),
+    'unknownError'           => xl('Unknown error'),
+];
+?>
 <script>
+    const TR = <?php echo json_encode($tr, JSON_UNESCAPED_UNICODE); ?>;
     const CSRF_TOKEN = document.getElementById('csrf_token').value;
     const providerSelect = document.getElementById('provider_id');
     const btnPreview = document.getElementById('btn_preview');
     const btnImport = document.getElementById('btn_import');
     const resultBox = document.getElementById('result');
 
-    function buildList(textos, vacio) {
+    function buildList(items, emptyText) {
         const ul = document.createElement('ul');
         ul.className = 'list-group list-group-flush import-list';
-        if (!textos || Object.keys(textos).length === 0) {
+        if (!items || Object.keys(items).length === 0) {
             const li = document.createElement('li');
             li.className = 'list-group-item text-muted';
-            li.textContent = vacio;
+            li.textContent = emptyText;
             ul.appendChild(li);
             return ul;
         }
-        for (const [id, raw] of Object.entries(textos)) {
+        for (const [id, raw] of Object.entries(items)) {
             const info = (raw && typeof raw === 'object') ? raw : { name: String(raw == null ? id : raw) };
             const li = document.createElement('li');
             li.className = 'list-group-item';
@@ -294,7 +352,7 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
             if (info.procedure_code) {
                 const sub = document.createElement('div');
                 sub.className = 'text-muted';
-                sub.textContent = 'Mapeo manual: ' + info.procedure_code + ' — importación automática omitida (el mapeo manual prevalece).';
+                sub.textContent = TR.manualMapSublabel.replace('{code}', info.procedure_code);
                 li.appendChild(sub);
             }
             ul.appendChild(li);
@@ -310,31 +368,31 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
         const alert = document.createElement('div');
         alert.className = s.dry_run ? 'alert alert-info' : 'alert alert-success';
         alert.textContent = s.dry_run
-            ? 'SIMULACIÓN — no se escribió nada en la base de datos. Revisá el resumen y confirmá la importación.'
-            : 'Importación completada para ' + s.provider_name + '.';
+            ? TR.dryRunAlert
+            : TR.importDone.replace('{provider}', s.provider_name);
         box.appendChild(alert);
 
         const row = document.createElement('div');
         row.className = 'row g-2 mb-3';
         const cards = [
-            ['Secciones (grupos)', s.panels],
-            ['Tests importados', s.tests_imported],
-            ['Tests activos del catálogo', s.catalog_total != null ? s.catalog_total : '—'],
-            ['Grupos creados', s.groups_created],
-            ['Grupos actualizados', s.groups_updated],
-            ['Tests creados', s.tests_created],
-            ['Tests actualizados', s.tests_updated],
-            ['Mapeos creados', s.mappings_inserted],
-            ['Mapeos actualizados', s.mappings_updated],
-            ['Excluidos (error)', Object.keys(s.excluded_by_error || {}).length],
-            ['Con advertencias', Object.keys(s.tests_with_warnings || {}).length],
-            ['Inactivos/no encontrados', Object.keys(s.inactive_missing || {}).length],
-            ['Conflictos con mapeos manuales', Object.keys(s.conflicts || {}).length],
-            ['Muestras sin SNOMED', Object.keys(s.specimen_unmapped || {}).length],
-            ['Secciones desactivadas', Object.keys(s.deactivated_panels || {}).length],
-            ['Tests desactivados', Object.keys(s.deactivated_tests || {}).length],
-            ['Secciones reactivadas', Object.keys(s.reactivated_panels || {}).length],
-            ['Tests reactivados', Object.keys(s.reactivated_tests || {}).length],
+            [TR.sectionsGroups, s.panels],
+            [TR.testsImported, s.tests_imported],
+            [TR.activeInCatalog, s.catalog_total != null ? s.catalog_total : '—'],
+            [TR.groupsCreated, s.groups_created],
+            [TR.groupsUpdated, s.groups_updated],
+            [TR.testsCreated, s.tests_created],
+            [TR.testsUpdated, s.tests_updated],
+            [TR.mappingsCreated, s.mappings_inserted],
+            [TR.mappingsUpdated, s.mappings_updated],
+            [TR.excludedError, Object.keys(s.excluded_by_error || {}).length],
+            [TR.withWarnings, Object.keys(s.tests_with_warnings || {}).length],
+            [TR.inactiveNotFound, Object.keys(s.inactive_missing || {}).length],
+            [TR.conflictsManual, Object.keys(s.conflicts || {}).length],
+            [TR.samplesNoSnomed, Object.keys(s.specimen_unmapped || {}).length],
+            [TR.sectionsDeactivated, Object.keys(s.deactivated_panels || {}).length],
+            [TR.testsDeactivated, Object.keys(s.deactivated_tests || {}).length],
+            [TR.sectionsReactivated, Object.keys(s.reactivated_panels || {}).length],
+            [TR.testsReactivated, Object.keys(s.reactivated_tests || {}).length],
         ];
         for (const [label, value] of cards) {
             const col = document.createElement('div');
@@ -353,44 +411,44 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
         box.appendChild(row);
 
         const dets = [
-            ['Excluidos por error', s.excluded_by_error || {}, 'Sin tests excluidos por error.'],
-            ['Con advertencias de catálogo', s.tests_with_warnings || {}, 'Sin tests con advertencias.'],
-            ['Inactivos / no encontrados', s.inactive_missing || {}, 'Sin tests inactivos.'],
-            ['Conflictos con mapeos manuales', s.conflicts || {}, 'Sin conflictos con mapeos manuales.'],
+            [TR.excludedErrorTitle, s.excluded_by_error || {}, TR.noExcluded],
+            [TR.withWarningsTitle, s.tests_with_warnings || {}, TR.noWarnings],
+            [TR.inactiveNotFound, s.inactive_missing || {}, TR.noInactive],
+            [TR.conflictsManual, s.conflicts || {}, TR.noConflicts],
             [
-                'Tipos de muestra sin código SNOMED',
+                TR.samplesNoSnomedTitle,
                 Object.fromEntries(Object.entries(s.specimen_unmapped || {}).map(([st, v]) => [
                     st,
                     {
-                        name: st + ' (' + v.tests + (v.tests === 1 ? ' test' : ' tests') + ')',
+                        name: st + ' (' + (v.tests === 1 ? TR.countTests : TR.countTestsPlural).replace('{n}', v.tests) + ')',
                         messages: v.example
-                            ? ['Ejemplo: ' + v.example + '. Completá el código SNOMED en mod_openelis_specimen_map y reimportá.']
+                            ? [TR.exampleSnomed.replace('{name}', v.example)]
                             : [],
                     },
                 ])),
-                'Todos los tipos de muestra tienen código SNOMED.',
+                TR.allSnomed,
             ],
-            ['Secciones desactivadas (ausentes del catálogo)', s.deactivated_panels || {}, 'Sin secciones desactivadas.'],
-            ['Tests desactivados (ausentes del catálogo)', s.deactivated_tests || {}, 'Sin tests desactivados.'],
-            ['Secciones reactivadas (volvieron al catálogo)', s.reactivated_panels || {}, 'Sin secciones reactivadas.'],
-            ['Tests reactivados (volvieron al catálogo)', s.reactivated_tests || {}, 'Sin tests reactivados.'],
+            [TR.sectionsDeactivatedTitle, s.deactivated_panels || {}, TR.noSectionsDeactivated],
+            [TR.testsDeactivatedTitle, s.deactivated_tests || {}, TR.noTestsDeactivated],
+            [TR.sectionsReactivatedTitle, s.reactivated_panels || {}, TR.noSectionsReactivated],
+            [TR.testsReactivatedTitle, s.reactivated_tests || {}, TR.noTestsReactivated],
         ];
-        for (const [titulo, data, vacio] of dets) {
+        for (const [title, data, emptyText] of dets) {
             const card = document.createElement('div');
             card.className = 'card mb-2';
             const h = document.createElement('div');
             h.className = 'card-header py-2';
-            h.textContent = titulo;
+            h.textContent = title;
             card.appendChild(h);
             if (Object.keys(data).length > 0) {
                 const body = document.createElement('div');
                 body.className = 'card-body py-2';
-                body.appendChild(buildList(data, vacio));
+                body.appendChild(buildList(data, emptyText));
                 card.appendChild(body);
             } else {
                 const body = document.createElement('div');
                 body.className = 'card-body py-2 text-muted';
-                body.textContent = vacio;
+                body.textContent = emptyText;
                 card.appendChild(body);
             }
             box.appendChild(card);
@@ -406,14 +464,14 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
         resultBox.innerHTML = '';
         const alert = document.createElement('div');
         alert.className = 'alert alert-danger';
-        alert.textContent = 'Error: ' + msg;
+        alert.textContent = TR.errPrefix + ' ' + msg;
         resultBox.appendChild(alert);
     }
 
     function run(action, pid, btnEl) {
         const providerId = pid != null ? String(pid) : providerSelect.value;
         if (!providerId) {
-            showError('Seleccioná un proveedor de laboratorio.');
+            showError(TR.selectProvider);
             return;
         }
         if (pid != null) { providerSelect.value = providerId; }
@@ -421,7 +479,7 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
         const btn = btnEl || (isPreview ? btnPreview : btnImport);
         if (btn) { btn.disabled = true; }
         const orig = btn ? btn.textContent : '';
-        if (btn) { btn.textContent = 'Espere…'; }
+        if (btn) { btn.textContent = TR.waiting; }
 
         const fd = new FormData();
         fd.append('csrf_token_form', CSRF_TOKEN);
@@ -439,7 +497,7 @@ $scriptsUrl = $webRoot . '/public/modules/openelis/';
                     renderResult(res.summary);
                     if (action === 'import') { btnImport.disabled = true; }
                 } else {
-                    showError(res.message || 'Error desconocido');
+                    showError(res.message || TR.unknownError);
                 }
             })
             .catch(err => showError(String(err)))

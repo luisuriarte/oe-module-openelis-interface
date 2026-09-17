@@ -30,6 +30,9 @@ namespace OpenEMR\Modules\OpenElis\Client;
  *   origin derived from the provider's remote_host with a Host header override
  *   for Docker routing, using Basic Auth, and SSL verification is disabled
  *   because this is trusted loopback traffic with a self-signed certificate.
+ *   The remote_host normally points at the FHIR store (ports 8080/8081/8444);
+ *   those ports answer only FHIR, so the REST webapp origin (8443) is derived
+ *   the same way PatientManagementClient does it.
  */
 class CatalogApiClient
 {
@@ -172,6 +175,13 @@ class CatalogApiClient
      * Derive the server origin (scheme://host[:port]) from a full URL such as
      * the provider's remote_host (e.g. https://127.0.0.1:8443/api/...).
      *
+     * The provider's remote_host normally points at the FHIR store (external
+     * FHIR API ports 8080/8081/8444, e.g. http://127.0.0.1:8081/fhir/) — but
+     * the REST webapp (the /OpenELIS-Global/rest/* endpoints) lives on its own
+     * origin (https://127.0.0.1:8443). Mirrors PatientManagementClient: when
+     * the remote_host port is an external-fhir-api port, we redirect to the
+     * default webapp origin instead of prefixing the FHIR port.
+     *
      * @param string $remoteHost
      * @return string
      */
@@ -179,10 +189,16 @@ class CatalogApiClient
     {
         if (filter_var($remoteHost, FILTER_VALIDATE_URL)) {
             $p = parse_url($remoteHost);
+            $port = isset($p['port']) ? (int)$p['port'] : null;
+            // If the port belongs to external-fhir-api (8080, 8081, 8444), the
+            // REST webapp is on the default origin (https://127.0.0.1:8443).
+            if (in_array($port, [8080, 8081, 8444], true)) {
+                return self::DEFAULT_ORIGIN;
+            }
             $scheme = $p['scheme'] ?? 'https';
             $host = $p['host'] ?? '';
-            $port = isset($p['port']) ? ':' . $p['port'] : '';
-            return $scheme . '://' . $host . $port;
+            $portStr = $port ? ':' . $port : '';
+            return $scheme . '://' . $host . $portStr;
         }
         return self::DEFAULT_ORIGIN;
     }
