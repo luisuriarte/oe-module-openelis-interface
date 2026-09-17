@@ -3,6 +3,7 @@
 namespace OpenEMR\Modules\OpenElis\Service;
 
 use OpenEMR\Modules\OpenElis\Client\OpenElisApiClient;
+use OpenEMR\Modules\OpenElis\CodeMappingService;
 use OpenEMR\Modules\OpenElis\Mappers\ResultMapper;
 
 /**
@@ -12,10 +13,13 @@ use OpenEMR\Modules\OpenElis\Mappers\ResultMapper;
  * lab tables (procedure_report + procedure_result) so they show up in the
  * standard OpenEMR lab-results UI.
  *
- * Correlation: each sent test line stores its "ServiceRequest/<uuid>" ref
- * (procedure_order_code.mod_openelis_service_request_id); we search
- * DiagnosticReport?based-on=<ref> and write one procedure_report per report
- * plus one procedure_result per Observation.
+ * Correlation: OpenELIS publishes reports against its own internal resources
+ * (patient nationalId == pubpid, and a ServiceRequest per analysis), not
+ * against the ServiceRequest the sender created. So each sent test line is
+ * matched by the pair (patient pubpid, LOINC code of the test): we search
+ * DiagnosticReport?subject.patient.nationalId==pubpid (the corresponding
+ * LOINC is resolved from mod_openelis_code_mapping) and write one
+ * procedure_report per report plus one procedure_result per Observation.
  *
  * Idempotency: a test line is marked mod_openelis_results_status='downloaded'
  * once its reports have been stored, so re-runs only fetch lines that have no
@@ -75,9 +79,8 @@ class ResultSyncService
             ];
         }
 
-        // Patient identity: the DiagnosticReport.subject (Patient/<uuid>) must
-        // correspond to patient_data.pubpid (OpenELIS nationalId). We verify
-        // the stored ref from the send flow; if missing, look up by nationalId.
+        // Patient identity: the reports we pull must belong to the patient
+        // whose OpenELIS nationalId equals patient_data.pubpid.
         $patientData = sqlQuery(
             "SELECT pid, pubpid FROM patient_data WHERE pid = ?",
             [$order['patient_id']]
@@ -85,16 +88,16 @@ class ResultSyncService
         if (empty($patientData)) {
             return ['success' => false, 'message' => xl('Patient not found'), 'stats' => []];
         }
-
-        try {
-            $verifiedPatientRef = $this->verifyPatientRef($order, $patientData['pubpid'] ?? '');
-        } catch (\RuntimeException $e) {
+        $pubpid = (string)($patientData['pubpid'] ?? '');
+        if ($pubpid === '') {
             return [
                 'success' => false,
-                'message' => $e->getMessage(),
+                'message' => xl('Patient has no pubpid, cannot correlate results with OpenELIS'),
                 'stats' => [],
             ];
         }
+
+        $labId = (int)($order['lab_id'] ?? 0);
 
         $codes = [];
         $rsCodes = sqlStatement(
@@ -102,12 +105,12 @@ class ResultSyncService
                     mod_openelis_service_request_id, mod_openelis_results_status
              FROM procedure_order_code
              WHERE procedure_order_id = ? AND do_not_send = 0
-               AND mod_openelis_service_request_id IS NOT NULL
                AND (mod_openelis_results_status IS NULL OR mod_openelis_results_status != 'downloaded')
              ORDER BY procedure_order_seq",
             [$procedureOrderId]
         );
         while ($row = sqlFetchArray($rsCodes)) {
+            $row['loinc'] = CodeMappingService::resolveLoincCode((string)$row['procedure_code'], $labId);
             $codes[] = $row;
         }
 
@@ -124,25 +127,21 @@ class ResultSyncService
 
         foreach ($codes as $code) {
             $seq = (int)$code['procedure_order_seq'];
-            $serviceRequestRef = (string)$code['mod_openelis_service_request_id'];
+            $loinc = (string)($code['loinc'] ?? '');
+
+            if ($loinc === '') {
+                error_log("OpenELIS results sync: order #$procedureOrderId test #$seq " . ($code['procedure_name'] ?? '?') . " has no LOINC mapping — skipped");
+                $errors[] = ($code['procedure_name'] ?? $seq) . ' (' . xl('no LOINC') . ')';
+                continue;
+            }
 
             try {
-                $matches = $this->client->findDiagnosticReportsByServiceRequest($serviceRequestRef);
+                $matches = $this->client->findDiagnosticReportsByPubpidAndLoinc($pubpid, $loinc);
                 $importedReports = 0;
 
                 foreach ($matches as $match) {
                     $report = $match['report'];
                     $observations = $match['observations'];
-
-                    // Never import results that reference a different patient.
-                    if (($report['subject']['reference'] ?? '') !== $verifiedPatientRef) {
-                        error_log(
-                            "OpenELIS results: report subject "
-                            . ($report['subject']['reference'] ?? '?')
-                            . " does not match order patient $verifiedPatientRef — skipped"
-                        );
-                        continue;
-                    }
 
                     if (empty($observations)) {
                         continue;
@@ -226,7 +225,6 @@ class ResultSyncService
                     SELECT 1 FROM procedure_order_code poc
                     WHERE poc.procedure_order_id = po.procedure_order_id
                       AND poc.do_not_send = 0
-                      AND poc.mod_openelis_service_request_id IS NOT NULL
                       AND (poc.mod_openelis_results_status IS NULL
                            OR poc.mod_openelis_results_status != 'downloaded')
                )
@@ -286,58 +284,6 @@ class ResultSyncService
             'stats' => $stats,
             'failures' => $failures,
         ];
-    }
-
-    private function verifyPatientRef(array $order, string $pubpid): string
-    {
-        $stored = (string)($order['mod_openelis_patient_ref'] ?? '');
-
-        if ($stored !== '') {
-            $patientId = self::extractId($stored);
-            $fhirPatient = $this->client->fetchResource('Patient', $patientId);
-            if ($fhirPatient === null) {
-                throw new \RuntimeException(xl('OpenELIS patient not found') . " ($stored)");
-            }
-            $nationalId = self::nationalIdOf($fhirPatient);
-            if ($nationalId !== $pubpid) {
-                throw new \RuntimeException(
-                    xl('Patient identity mismatch')
-                    . ": OpenELIS nationalId=\"$nationalId\" vs pubpid=\"$pubpid\""
-                );
-            }
-            return $stored;
-        }
-
-        // No stored ref (order sent before this column existed): find by pubpid.
-        $found = $this->client->findPatientByIdentifier($pubpid);
-        if ($found === null || empty($found['id'])) {
-            throw new \RuntimeException(xl('Patient not found in OpenELIS'));
-        }
-        return 'Patient/' . $found['id'];
-    }
-
-    /**
-     * Extract the logical id from a "ResourceType/<id>" style ref.
-     */
-    private static function extractId(string $ref): string
-    {
-        if (preg_match('#^[A-Za-z]+/(.+)$#', $ref, $m)) {
-            return $m[1];
-        }
-        return $ref;
-    }
-
-    /**
-     * Read the national_id identifier value from a FHIR Patient resource.
-     */
-    private static function nationalIdOf(array $fhirPatient): string
-    {
-        foreach (($fhirPatient['identifier'] ?? []) as $identifier) {
-            if (($identifier['system'] ?? '') === 'http://openelis-global.org/pat_nationalId') {
-                return (string)($identifier['value'] ?? '');
-            }
-        }
-        return '';
     }
 
     private function storeReport(array $order, int $seq, array $reportRow): int

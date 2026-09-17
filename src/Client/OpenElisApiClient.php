@@ -97,23 +97,37 @@ class OpenElisApiClient
     }
 
     /**
-     * Find DiagnosticReports that carry lab results and bring their
+     * Find DiagnosticReports that carry lab results for a patient identified
+     * by its OpenELIS national id (the OpenEMR pubpid), and bring their
      * Observations along in the same Bundle.
      *
-     * Implements the result lookup without relying on read-by-ID or the
-     * `based-on` chained search, both of which the OpenELIS FHIR store cannot
-     * resolve for resources persisted with numeric (client-assigned) IDs
-     * (no `hfj_forced_id` row → `HAPI-2001` on GET, `total=0` on chained
-     * search). A single plain search with `_include=DiagnosticReport:result`
-     * returns the reports AND their included Observations in one request; we
-     * then filter in PHP by matching `basedOn[].reference` against the
-     * ServiceRequest ref stored on the test line.
+     * OpenELIS publishes result reports against its OWN internal resources
+     * (a patient whose `http://openelis-global.org/pat_nationalId` equals the
+     * pubpid, and a ServiceRequest whose id is the internal analysis uuid),
+     * which are different from the resources the sender created. The result
+     * lookup therefore cannot rely on read-by-ID or on a `based-on` search
+     * against the sender's ServiceRequest — both fail for resources persisted
+     * with numeric/client-assigned IDs (no `hfj_forced_id` row → `HAPI-2001`
+     * on GET, `total=0` on chained search).
      *
-     * @param string $serviceRequestRef  e.g. "ServiceRequest/<id>"
-     * @return array                     List of ['report' => ..., 'observations' => [...]] (may be empty)
+     * Strategy: a single plain search with `_include=DiagnosticReport:result`
+     * returns all reports AND their included Observations in one request. We
+     * then filter in PHP by the report's subject patient nationalId (must
+     * equal the pubpid) and by the test's LOINC code (report level first,
+     * observation level as fallback).
+     *
+     * @param string $pubpid  OpenEMR patient pubpid (= OpenELIS pat_nationalId)
+     * @param string $loinc   LOINC code of the test whose results we expect
+     * @return array          List of ['report' => ..., 'observations' => [...]] (may be empty)
      */
-    public function findDiagnosticReportsByServiceRequest(string $serviceRequestRef): array
+    public function findDiagnosticReportsByPubpidAndLoinc(string $pubpid, string $loinc): array
     {
+        $pubpid = trim($pubpid);
+        $loinc = trim($loinc);
+        if ($pubpid === '' || $loinc === '') {
+            return [];
+        }
+
         $response = $this->request('GET', 'DiagnosticReport', [
             '_count' => 200,
             '_include' => 'DiagnosticReport:result',
@@ -129,7 +143,7 @@ class OpenElisApiClient
         }
 
         // Index all bundled resources by their "ResourceType/<id>" reference
-        // (matched reports + the Observations pulled in via _include).
+        // (the reports + the Observations pulled in via _include).
         $includedByRef = [];
         foreach (($bundle['entry'] ?? []) as $entry) {
             $resource = $entry['resource'] ?? null;
@@ -138,21 +152,35 @@ class OpenElisApiClient
             }
         }
 
-        $targetId = self::lastSegment($serviceRequestRef);
-
         $reports = [];
         foreach (($bundle['entry'] ?? []) as $entry) {
             $resource = $entry['resource'] ?? null;
             if (!is_array($resource) || ($resource['resourceType'] ?? '') !== 'DiagnosticReport') {
                 continue;
             }
-            if (!self::reportBasedOnMatches($resource, $targetId)) {
+
+            // The report's subject patient must carry this pubpid as its
+            // OpenELIS nationalId. Verified directly against the referenced
+            // patient (there can be several Patient resources sharing a pubpid
+            // in the store: the sender's and OpenELIS's own).
+            $subjectRef = (string)($resource['subject']['reference'] ?? '');
+            if (!preg_match('#^Patient/(.+)$#', $subjectRef, $m)) {
+                continue;
+            }
+            $subject = $this->fetchResource('Patient', $m[1]);
+            if ($subject === null || self::nationalIdOf($subject) !== $pubpid) {
+                continue;
+            }
+
+            $observations = $this->observationsOfReport($resource, $includedByRef);
+            // The report (or any of its observations) must carry the test LOINC.
+            if (!self::reportCarriesLoinc($resource, $observations, $loinc)) {
                 continue;
             }
 
             $reports[] = [
                 'report' => $resource,
-                'observations' => $this->observationsOfReport($resource, $includedByRef),
+                'observations' => $observations,
             ];
         }
 
@@ -160,18 +188,48 @@ class OpenElisApiClient
     }
 
     /**
-     * True when any `basedOn[].reference` of the report resolves to the same
-     * ServiceRequest id as the one stored on the order's test line.
+     * Read the patient's national id from a FHIR Patient resource
+     * ("http://openelis-global.org/pat_nationalId" identifier), or ''.
      */
-    private static function reportBasedOnMatches(array $report, string $targetId): bool
+    private static function nationalIdOf(array $patient): string
     {
-        foreach (($report['basedOn'] ?? []) as $basedOn) {
-            $ref = (string)($basedOn['reference'] ?? '');
-            if (self::lastSegment($ref) === $targetId) {
+        foreach (($patient['identifier'] ?? []) as $identifier) {
+            if (($identifier['system'] ?? '') === 'http://openelis-global.org/pat_nationalId') {
+                return (string)($identifier['value'] ?? '');
+            }
+        }
+        return '';
+    }
+
+    /**
+     * True when the report code (or any of its observations' code) carries
+     * the given LOINC code. Report level is evaluated first; observation
+     * level covers reports whose code is a panel-level LOINC.
+     */
+    private static function reportCarriesLoinc(array $report, array $observations, string $loinc): bool
+    {
+        if (self::extractLoinc($report['code'] ?? []) === $loinc) {
+            return true;
+        }
+        foreach ($observations as $obs) {
+            if (self::extractLoinc($obs['code'] ?? []) === $loinc) {
                 return true;
             }
         }
         return false;
+    }
+
+    /**
+     * Read the LOINC code ("http://loinc.org") from a CodeableConcept, or ''.
+     */
+    private static function extractLoinc(array $codeableConcept): string
+    {
+        foreach (($codeableConcept['coding'] ?? []) as $coding) {
+            if (($coding['system'] ?? '') === 'http://loinc.org') {
+                return (string)($coding['code'] ?? '');
+            }
+        }
+        return '';
     }
 
     /**

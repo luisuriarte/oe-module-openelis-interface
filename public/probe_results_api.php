@@ -5,9 +5,11 @@
  *
  * Copy this file next to send_order_action.php (public/modules/openelis/)
  * and open:
- *   probe_results_api.php?ppid=4                  -> first 5 DiagnosticReports (raw)
- *   probe_results_api.php?ppid=4&sr=ServiceRequest/<uuid>  -> reports based on that
- *              ServiceRequest, plus the Observations each report references.
+ *   probe_results_api.php?ppid=4                     -> first 5 DiagnosticReports (raw)
+ *   probe_results_api.php?ppid=4&sr=ServiceRequest/41 -> only used for display, not for filtering
+ *   probe_results_api.php?ppid=4&pubpid=266&loinc=704-7 -> reports for that patient
+ *              (its OpenELIS nationalId == pubpid) carrying that LOINC, plus the
+ *              Observations each report references.
  *
  * It prints raw JSON payloads so you can confirm the actual field names the
  * OpenELIS (HAPI FHIR) server returns before wiring the result import.
@@ -87,10 +89,12 @@ $client = new OpenElisApiClient($provider['remote_host'], $provider['login'], $p
 echo "Provider: #{$provider['ppid']} {$provider['name']} ({$provider['remote_host']}) protocol={$provider['protocol']}\n\n";
 
 $sr = (string)($_GET['sr'] ?? '');
+$pubpid = (string)($_GET['pubpid'] ?? '');
+$loinc = (string)($_GET['loinc'] ?? '');
 
-if ($sr !== '') {
-    echo "== DiagnosticReport search (global, _include=DiagnosticReport:result) filtered by basedOn=$sr ==\n";
-    $matches = $client->findDiagnosticReportsByServiceRequest($sr);
+if ($pubpid !== '' && $loinc !== '') {
+    echo "== DiagnosticReport matching pubpid=$pubpid (nationalId) + LOINC=$loinc ==\n";
+    $matches = $client->findDiagnosticReportsByPubpidAndLoinc($pubpid, $loinc);
     echo "count: " . count($matches) . "\n";
     foreach ($matches as $match) {
         $report = $match['report'];
@@ -100,6 +104,16 @@ if ($sr !== '') {
         foreach ($match['observations'] as $obs) {
             echo json_encode($obs, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n";
         }
+    }
+} elseif ($sr !== '') {
+    echo "== sr=$sr: filtering is no longer done by ServiceRequest (OpenELIS\n";
+    echo "   publishes reports against its own internal resources). Use pubpid + loinc.\n\n";
+    echo "== DiagnosticReport?_count=5&_sort=-issued (raw, for reference) ==\n";
+    $list = $client->listDiagnosticReports(5);
+    echo "count: " . count($list) . "\n";
+    foreach ($list as $report) {
+        echo "---- report " . ($report['id'] ?? '(no id)') . " status=" . ($report['status'] ?? '?') . " ----\n";
+        echo json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n";
     }
 } else {
     echo "== DiagnosticReport?_count=5&_sort=-issued (raw) ==\n";
